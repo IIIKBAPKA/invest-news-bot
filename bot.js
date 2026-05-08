@@ -3,7 +3,6 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        // ОФІЦІЙНА ВИМОГА SEC: Назва + Email. Це прибере 403 помилку.
         'User-Agent': 'InvestAnalyticsBot/1.0 (anton012@gmail.com)', 
         'Host': 'www.sec.gov',
         'Accept': 'application/atom+xml, application/xml, text/xml',
@@ -34,20 +33,19 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.7 Gemini 2.0 Flash Lite)...");
+        console.log("Starting monitor (v3.7 Gemini 2.0 Flash Lite)...");
         let allItems = [];
         let sourceStats = {};
 
         for (const feedSource of FEEDS) {
             try {
-                // Невелика затримка для SEC
                 await new Promise(r => setTimeout(r, 2000));
                 const feed = await parser.parseURL(feedSource.url);
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
                 allItems = allItems.concat(items);
                 sourceStats[feedSource.name] = items.length;
             } catch (e) {
-                console.error(`❌ Помилка джерела [${feedSource.name}]:`, e.message);
+                console.error(`Source Error [${feedSource.name}]:`, e.message);
             }
         }
 
@@ -59,18 +57,18 @@ async function run() {
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
-        console.log(`\n📊 СТАТИСТИКА:`);
-        console.log(`- Всього знайдено: ${allItems.length}`);
-        Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр: ${uniqueItems.length}\n`);
+        console.log(`\nSTATS:`);
+        console.log(`- Total found: ${allItems.length}`);
+        Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} fetched`));
+        console.log(`- Filtered: ${uniqueItems.length}\n`);
 
         if (uniqueItems.length === 0) {
-            console.log("☕ Нових подій немає. Вихід.");
+            console.log("No new events. Exit.");
             process.exit(0);
         }
 
         for (const item of uniqueItems.slice(0, 10)) {
-            console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
+            console.log(`----------\nProcessing [${item.sourceName}]: ${item.title}`);
             
             let fullText = item.contentSnippet || item.description || "";
             if (item.sourceName === 'GoogleNews') {
@@ -79,9 +77,9 @@ async function run() {
                     if (res.ok) {
                         const content = await res.text();
                         fullText = content.slice(0, 4000); 
-                        console.log("✅ Текст завантажено.");
+                        console.log("Full text loaded.");
                     }
-                } catch (e) { console.log("⚠️ Тільки сніпет."); }
+                } catch (e) { console.log("Snippet only."); }
             }
 
             await new Promise(r => setTimeout(r, 5000));
@@ -106,7 +104,6 @@ async function run() {
 
             while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
-                    // Встановлено Gemini 2.0 Flash Lite
                     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
                     
                     const result = await Promise.race([
@@ -130,17 +127,17 @@ async function run() {
                             }),
                             signal: AbortSignal.timeout(8000)
                         });
-                        console.log("📨 Надіслано.");
+                        console.log("Sent.");
                     } else {
-                        console.log("⏭️ AI SKIP.");
+                        console.log("AI SKIP.");
                     }
                     success = true;
                 } catch (err) {
                     attempts++;
-                    console.error(`❌ Помилка AI (Спроба ${attempts}): ${err.message}`);
+                    console.error(`AI Error (Attempt ${attempts}): ${err.message}`);
 
                     if (attempts < MAX_AI_ATTEMPTS && (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT')) {
-                        console.log(`⚠️ Чекаємо 12 сек...`);
+                        console.log(`Waiting 12s...`);
                         await new Promise(r => setTimeout(r, 12000));
                     } else {
                         success = true; 
@@ -148,7 +145,12 @@ async function run() {
                 }
             }
         }
-        console.log("✅ Роботу завершено успішно.");
+        console.log("Done.");
         process.exit(0);
     } catch (error) {
-        console.error("
+        console.error("Critical Error:", error.message);
+        process.exit(1);
+    }
+}
+
+run();
