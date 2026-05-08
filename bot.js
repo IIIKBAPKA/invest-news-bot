@@ -13,8 +13,6 @@ async function run() {
         console.log("Запуск перевірки новин...");
         const feed = await parser.parseURL(RSS_URL);
         
-        console.log(`Всього знайдено новин: ${feed.items.length}`);
-        
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
         const recentItems = feed.items.filter(item => new Date(item.pubDate).getTime() > thirtyFiveMinsAgo);
 
@@ -24,59 +22,65 @@ async function run() {
         }
 
         console.log(`Знайдено свіжих новин: ${recentItems.length}`);
-        const itemsToProcess = recentItems.slice(0, 3); 
+        
+        // Збільшили ліміт обробки до 10 новин (щоб зачепити всі важливі)
+        const itemsToProcess = recentItems.slice(0, 10); 
 
         for (const item of itemsToProcess) {
             console.log(`Оброблюємо: ${item.title}`);
-            const prompt = `Ти — експертний інвестиційний аналітик. Проаналізуй наступну новину та сформуй звіт.
-            Використовуй виключно українську мову. НЕ використовуй зірочки (*), решітки (#) як форматування Markdown, лише чистий текст.
+            
+            // НОВИЙ СУПЕР-ПРОМПТ З ФІЛЬТРОМ ТА ШАБЛОНОМ
+            const prompt = `Ти — Senior інвестиційний аналітик. 
+            Твоє завдання: відфільтрувати інформаційний шум і дати вижимку лише важливих подій.
 
-            Сформуй відповідь за таким планом:
+            КРОК 1 (ФІЛЬТР): Оціни новину. Якщо це "вода", клікбейт, чутки без джерел, аналітика заради аналітики або просто щоденні незначні коливання цін — твоя відповідь має складатись рівно з одного слова: SKIP.
 
-            1. ТІКЕРИ ТА ЧАС:
-            Вкажи тікери компаній з хештегом (наприклад, #NVDA, #GOOG). Якщо компаній декілька — перерахуй усі. 
-            Час публікації новини: ${item.pubDate}.
+            КРОК 2: Якщо новина дійсно важлива (звіти, макроекономіка, звільнення, інновації, реальний вплив на ринок), сформуй звіт СУВОРО за цим HTML-шаблоном. Заповни дані в дужках [...]:
 
-            2. АНОТАЦІЯ:
-            Стисло (2-3 речення) про що новина.
+            🎯 <b>Головне:</b> [Одне найважливіше речення про суть новини]
 
-            3. АНАЛІЗ GEMINI:
-            Твої 3 головні висновки з цієї події. Що це означає в довгостроковій перспективі?
+            🏢 <b>Компанії:</b> [Тікери з хештегом: #NVDA, #GOOG тощо]
+            📊 <b>Сентимент:</b> [Вибери одне: 🟢 Позитивний / 🔴 Негативний / 🟡 Нейтральний]
+            🔥 <b>Важлвість:</b> [Оцінка від 1 до 10]/10
 
-            4. ВПЛИВ НА РИНОК:
-            - Як це змінить ціну акції головної компанії?
-            - Хто з конкурентів може постраждати або виграти від цієї новини? (назви конкретні імена бажано тікери напр. #NVDA).
-            - Вплив на ринок/сектор у цілому (позитивний/негативний/нейтральний).
+            🧠 <b>Аналіз:</b>
+            [2-3 тези про те, чому це важливо і як вплине на опціони чи акції в середньостроковій перспективі. Коротко і по суті.]
 
-            5. РИЗИК ТА МОЖЛИВІСТЬ:
-            Оціни рівень важливості новини від 1 до 10. На що інвестору варто звернути увагу прямо зараз?
+            ⚔️ <b>Конкуренти:</b>
+            [Хто може виграти чи програти від цього? Назви тікери]
 
-            Новина для аналізу: ${item.title} — ${item.contentSnippet || item.description}`;
+            ВАЖЛИВО: Не використовуй Markdown (* або #, окрім тікерів). Відповідай українською мовою.
+            Новина: ${item.title} — ${item.contentSnippet || item.description}`;
 
             let responseText = "";
             let attempt = 0;
             const maxAttempts = 3;
 
-            // Блок Retry для стабільності API
             while (attempt < maxAttempts) {
                 try {
                     const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
                     const result = await model.generateContent(prompt);
-                    responseText = result.response.text();
-                    break; // Успіх, виходимо з циклу спроб
+                    responseText = result.response.text().trim();
+                    break;
                 } catch (err) {
                     attempt++;
-                    console.warn(`Спроба ${attempt} запиту до ШІ невдала: ${err.message}`);
+                    console.warn(`Спроба ${attempt} невдала: ${err.message}`);
                     if (attempt >= maxAttempts) {
-                        responseText = "⚠️ *Gemini API тимчасово перевантажений і не зміг проаналізувати новину. Прочитайте оригінал за посиланням нижче.*";
+                        responseText = "ERROR"; // Маркер помилки
                     } else {
-                        console.log("Чекаємо 10 секунд перед наступною спробою...");
                         await new Promise(res => setTimeout(res, 10000));
                     }
                 }
             }
 
-            const message = `📰 <b>${item.title}</b>\n\n${responseText}\n\n🔗 <a href="${item.link}">Джерело</a>`;
+            // МАГІЯ ФІЛЬТРАЦІЇ: Якщо ШІ сказав SKIP або впав — ігноруємо новину
+            if (responseText.startsWith("SKIP") || responseText === "ERROR") {
+                console.log(`Новина пропущена (Неважлива або помилка API): ${item.title}`);
+                continue; 
+            }
+
+            // Якщо новина пройшла фільтр, формуємо красиве повідомлення
+            const message = `📰 <a href="${item.link}">${item.title}</a>\n\n${responseText}`;
 
             const tgUrl = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
             const tgResponse = await fetch(tgUrl, {
@@ -85,12 +89,13 @@ async function run() {
                 body: JSON.stringify({
                     chat_id: TELEGRAM_CHAT_ID,
                     text: message,
-                    parse_mode: 'HTML'
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true // Відключаємо величезне прев'ю посилання знизу, бо у нас і так є текст
                 })
             });
             
             if (tgResponse.ok) {
-                console.log("Успішно відправлено!");
+                console.log("Успішно відправлено крутий звіт!");
             } else {
                 console.error("Помилка Telegram:", await tgResponse.text());
             }
