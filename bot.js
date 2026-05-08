@@ -24,7 +24,6 @@ const FEEDS = [
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
-// Використовуємо регулярні вирази для точного пошуку тікерів як окремих слів
 const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
 
 const hasTicker = (item) => {
@@ -34,7 +33,7 @@ const hasTicker = (item) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (v3.2.7 - Custom Prompt Fixed)...");
+        console.log("🚀 Запуск моніторингу (v3.2.8 - Full Text Mode)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -72,11 +71,25 @@ async function run() {
         for (const item of uniqueItems.slice(0, 10)) {
             console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
-            const newsContent = `Джерело: ${item.sourceName}\nЗаголовок: ${item.title}\nОпис: ${item.contentSnippet || item.description || "Опис відсутній"}`;
+            let fullText = item.contentSnippet || item.description || "";
+            
+            // Повертаємо отримання повного тексту через Jina Reader
+            if (item.sourceName === 'GoogleNews') {
+                try {
+                    const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
+                    if (res.ok) {
+                        const content = await res.text();
+                        // Очищуємо текст від зайвих пробілів та обрізаємо до розумного ліміту (8000 симв.)
+                        fullText = content.replace(/\s+/g, ' ').slice(0, 8000);
+                        console.log("✅ Повний текст отримано та очищено.");
+                    }
+                } catch (e) { 
+                    console.log("⚠️ Не вдалося отримати повний текст, використовуємо сніпет."); 
+                }
+            }
 
             await new Promise(r => setTimeout(r, 6000));
 
-            // Твій промпт БЕЗ ЗМІН
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
             Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} або ти вважаєш що вона неважлива — відповідай SKIP. Важливо збережи структуру шаблону
 
@@ -95,7 +108,8 @@ async function run() {
             ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і як на них вплине]
 
             Дані:
-            ${newsContent}`;
+            Заголовок: ${item.title}
+            Текст новини: ${fullText}`;
 
             let success = false;
             let attempts = 0;
