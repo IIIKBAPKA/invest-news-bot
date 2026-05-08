@@ -12,7 +12,6 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Словник для точного пошуку тікерів та назв компаній
 const TARGET_COMPANIES = {
     "NVDA": ["NVIDIA"],
     "GOOG": ["GOOGLE", "ALPHABET"],
@@ -36,20 +35,17 @@ const TARGET_COMPANIES = {
     "1VOW3": ["VOLKSWAGEN"]
 };
 
-// Плаский список усіх слів для пошуку (тікери + назви)
 const ALL_TARGETS = [...Object.keys(TARGET_COMPANIES), ...Object.values(TARGET_COMPANIES).flat()];
 
 const tickerQuery = Object.keys(TARGET_COMPANIES).join(" OR ");
 const FEEDS = [
     { name: 'GoogleNews', url: `https://news.google.com/rss/search?q=${encodeURIComponent(tickerQuery)}+when:1d&hl=en-US&gl=US` },
-    // Збільшено count до 100 для SEC, щоб не пропускати важливі звіти
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=100&output=atom' } 
 ];
 
 const hasTicker = (text) => {
     const upperText = text.toUpperCase();
     return ALL_TARGETS.some(target => {
-        // Шукаємо повне співпадіння слова (\b), щоб не ловити "AMD" у "KODIAK"
         const regex = new RegExp(`\\b${target.toUpperCase()}\\b`, 'i');
         return regex.test(upperText);
     });
@@ -57,7 +53,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 4.0 Pro Search)...");
+        console.log("🚀 Запуск моніторингу (Версія: 4.2 Base Dedup)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -72,7 +68,7 @@ async function run() {
             }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (60 * 60 * 1000); 
+        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000); 
         let passedBySource = { GoogleNews: 0, SEC: 0 };
 
         const filtered = allItems.filter(item => {
@@ -89,19 +85,20 @@ async function run() {
         });
 
         if (filtered.length > 0) {
-            console.log(`\n🔍 СПИСОК УСІХ ЗНАЙДЕНИХ НОВИН (ДО ДЕДУПЛІКАЦІЇ):`);
+            console.log(`\n🔍 СПИСОК УСІХ ЗНАЙДЕНИХ НОВИН:`);
             filtered.forEach((item, idx) => {
                 const timeStr = item.pubDate || item.isoDate || "Невідомий час";
                 console.log(`${idx + 1}. [${item.sourceName}] [${timeStr}] ${item.title}`);
             });
         }
 
+        // Тільки базова дедуплікація (за ідентичною назвою)
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
         console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр (Час + Тікер/Назва):`);
+        console.log(`- Пройшли фільтр (35хв + Тікер/Назва):`);
         Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
         console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
@@ -134,11 +131,15 @@ async function run() {
 
             КРОК 2: Сформуй звіт (HTML, без Markdown):
             🎯 <b>Головне:</b> [Суть події]
+            
             🏢 <b>Компанії:</b> [#TICKER]
             📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
+            
             🧠 <b>Аналіз:</b> [Вплив на ціну]
+            
             📈 <b>Опціонний кут:</b> [Стратегії простішою мовою]
+            
             ⚔️ <b>Конкуренти:</b> [Тікери]
 
             Текст: ${item.title} \n ${fullText}`;
@@ -158,54 +159,4 @@ async function run() {
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
-                        let safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u)\b)[^>]+>/gi, '');
-                        const tags = ['b', 'i', 'a', 'code', 's', 'u'];
-                        tags.forEach(tag => {
-                            const opened = (safeResponse.match(new RegExp(`<${tag}(\\s|>|/)`, 'g')) || []).length;
-                            const closed = (safeResponse.match(new RegExp(`</${tag}>`, 'g')) || []).length;
-                            if (opened > closed) {
-                                safeResponse += `</${tag}>`.repeat(opened - closed);
-                            }
-                        });
-
-                        const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${safeResponse}`;
-                        
-                        const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
-                            signal: AbortSignal.timeout(10000)
-                        });
-
-                        if (tgRes.ok) console.log("📨 Надіслано в Telegram.");
-                        else {
-                            const errData = await tgRes.json();
-                            console.error(`❌ Telegram Error: ${errData.description}`);
-                        }
-                    } else console.log("⏭️ SKIP.");
-                    
-                    success = true;
-                } catch (err) {
-                    attempts++;
-                    console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS})...`);
-                    await new Promise(r => setTimeout(r, 2000));
-                    
-                    if (attempts === MAX_AI_ATTEMPTS) {
-                        const fallbackMsg = `🔔 <b>Новина (Без аналізу):</b> <a href="${item.link}">${item.title}</a>\n\n<i>⚠️ AI сервери перевантажені.</i>`;
-                        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: fallbackMsg, parse_mode: 'HTML' })
-                        });
-                        success = true;
-                    }
-                }
-            }
-        }
-        process.exit(0);
-    } catch (error) {
-        process.exit(1);
-    }
-}
-
-run();
+                        let safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u
