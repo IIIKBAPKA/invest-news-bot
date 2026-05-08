@@ -3,7 +3,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        'User-Agent': 'InvestBot/1.0 (your-email@example.com)', // Впиши свою пошту
+        'User-Agent': 'InvestBot/1.0 (your-email@example.com)', // ВПИШИ СВОЮ ПОШТУ ТУТ
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
 });
@@ -34,10 +34,14 @@ async function run() {
         
         const recentItems = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate).getTime();
-            const content = (item.title + (item.contentSnippet || "")).toUpperCase();
-            const isTarget = content.includes("NVDA") || content.includes("GOOG") || content.includes("VST") || content.includes("MARKET");
+            const titleUpper = item.title.toUpperCase();
+            const contentUpper = (item.title + (item.contentSnippet || "")).toUpperCase();
             
-            // ЛОГУВАННЯ ФІЛЬТРА ТІКЕРІВ
+            // Фільтруємо технічний спам від банків (структурні ноти 424B2)
+            if (titleUpper.includes("424B2")) return false;
+
+            const isTarget = contentUpper.includes("NVDA") || contentUpper.includes("GOOG") || contentUpper.includes("VST") || contentUpper.includes("MARKET");
+            
             if (pubDate > thirtyFiveMinsAgo && !isTarget) {
                 console.log(`[Фільтр тікерів] Пропущено (немає цільових компаній): ${item.title}`);
             }
@@ -64,7 +68,7 @@ async function run() {
             КРОК 1 (ФІЛЬТР): Якщо це несуттєва технічна новина, клікбейт або рутинний звіт, що не впливає на ціну — відповідай: SKIP.
             Особлива увага SEC Filings: Форма 4 (інсайдери), 8-K (важливі події), 10-Q/K (звіти) — це ВАЖЛИВО.
 
-            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном:
+            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном. Не використовуй Markdown (** чи *). Заповни дані в дужках [...]:
 
             🎯 <b>Головне:</b> [Суть події. Якщо це SEC — вкажи тип форми та хто здійснив дію]
 
@@ -80,7 +84,7 @@ async function run() {
 
             ⚔️ <b>Конкуренти:</b> [Тікери через #]
 
-            ВАЖЛИВО: Не використовуй Markdown. Відповідай українською мовою.
+            ВАЖЛИВО: Відповідай українською мовою.
             Джерело: ${item.link}
             Подія: ${item.title} — ${item.contentSnippet || item.description}`;
 
@@ -96,12 +100,15 @@ async function run() {
                     break;
                 } catch (err) {
                     attempt++;
-                    if (attempt >= maxAttempts) responseText = "ERROR";
-                    else await new Promise(res => setTimeout(res, 10000));
+                    console.warn(`[Спроба ${attempt}] Помилка Gemini для "${item.title}": ${err.message}`);
+                    if (attempt >= maxAttempts) {
+                        responseText = "ERROR";
+                    } else {
+                        await new Promise(res => setTimeout(res, 10000));
+                    }
                 }
             }
 
-            // ВИПРАВЛЕНЕ ЛОГУВАННЯ SKIP ТА ERROR
             if (responseText.startsWith("SKIP")) {
                 console.log(`[AI SKIP] Новина визнана неважливою: ${item.title}`);
                 continue;
