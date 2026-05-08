@@ -6,7 +6,6 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Посилання на загальні фінансові новини (можна змінити)
 const RSS_URL = 'https://finance.yahoo.com/news/rssindex';
 
 async function run() {
@@ -14,23 +13,31 @@ async function run() {
         console.log("Запуск перевірки новин...");
         const feed = await parser.parseURL(RSS_URL);
         
-        // Відбираємо новини лише за останні 35 хвилин, щоб не спамити
-        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
-        const recentItems = feed.items.filter(item => new Date(item.pubDate).getTime() > thirtyFiveMinsAgo);
+        console.log(`Всього знайдено новин у стрічці: ${feed.items.length}`);
+        if (feed.items.length > 0) {
+            console.log(`Найсвіжіша новина в RSS датована: ${feed.items[0].pubDate}`);
+        }
+
+        // Для тесту збільшуємо вікно пошуку до 12 годин
+        const timeWindow = Date.now() - (12 * 60 * 60 * 1000);
+        const recentItems = feed.items.filter(item => new Date(item.pubDate).getTime() > timeWindow);
 
         if (recentItems.length === 0) {
-            console.log("Нових новин за останні 35 хвилин немає.");
+            console.log("Нових новин за вказаний час немає.");
             return;
         }
 
-        // Обмежуємо кількість новин до 3-х за один запуск
-        const itemsToProcess = recentItems.slice(0, 3); 
+        console.log(`Пройшли фільтр часу: ${recentItems.length} новин.`);
+
+        // Беремо ТІЛЬКИ ОДНУ новину для тесту, щоб не заспамити канал
+        const itemsToProcess = recentItems.slice(0, 1); 
 
         for (const item of itemsToProcess) {
+            console.log(`Оброблюємо новину: ${item.title}`);
             const prompt = `Ти — професійний інвестиційний аналітик. Я надам тобі заголовок та опис новини.
             1. Зроби короткий підсумок (до 3-х тез).
             2. Оціни загальний вплив на ринок (Позитивний / Негативний / Нейтральний).
-            3. Якщо згадуються конкретні компанії (особливо GOOG, NVDA, VST або інші великі гравці), виділи це.
+            3. Якщо згадуються конкретні компанії (особливо GOOG, NVDA, VST), виділи це.
             Мова відповіді: Українська.
             
             Новина: ${item.title} — ${item.contentSnippet || item.description}`;
@@ -42,7 +49,7 @@ async function run() {
             const message = `📰 **${item.title}**\n\n${response}\n\n🔗 [Джерело](${item.link})`;
 
             const tgUrl = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-            await fetch(tgUrl, {
+            const tgResponse = await fetch(tgUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -51,10 +58,12 @@ async function run() {
                     parse_mode: 'Markdown'
                 })
             });
-            console.log(`Відправлено новину: ${item.title}`);
             
-            // Пауза 2 секунди, щоб Telegram не заблокував за спам
-            await new Promise(res => setTimeout(res, 2000));
+            if (tgResponse.ok) {
+                console.log("Успішно відправлено в Telegram!");
+            } else {
+                console.error("Помилка відправки в Telegram:", await tgResponse.text());
+            }
         }
         console.log("Роботу завершено успішно!");
     } catch (error) {
