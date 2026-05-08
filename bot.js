@@ -24,14 +24,15 @@ const FEEDS = [
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
+const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
+
 const hasTicker = (text) => {
-    const upperText = text.toUpperCase();
-    return TARGET_TICKERS.some(t => upperText.includes(t));
+    return targetRegex.test(text);
 };
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.2 Stable)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.3 Stable)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -71,7 +72,7 @@ async function run() {
         console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
         if (uniqueItems.length === 0) {
-            console.log("☕ Нових подій немає. Завершуємо.");
+            console.log("☕ Нових подій немає.");
             process.exit(0);
         }
 
@@ -84,31 +85,35 @@ async function run() {
                     const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
                     if (res.ok) {
                         const content = await res.text();
-                        fullText = content.slice(0, 8000);
-                        console.log("✅ Повний текст отримано.");
+                        fullText = content.slice(0, 8000); // Повернув твій ліміт символів
+                        console.log("✅ Повний текст завантажено.");
                     }
-                } catch (e) { console.log("⚠️ Тільки сніпет (Таймаут або Помилка)."); }
+                } catch (e) { console.log("⚠️ Тільки сніпет."); }
             }
 
             await new Promise(r => setTimeout(r, 4000));
 
-            const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
-            Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} — відповідай SKIP.
+            const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
+            Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або ти думаєш що вона особливо неважлива для ринку — відповідай SKIP. Важливо зберігати при відповіді мені формат шаблону
 
-            КРОК 2: Сформуй звіт (HTML, без Markdown):
-            🎯 <b>Головне:</b> [Суть події без води]
+            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном (без Markdown):
+            🎯 <b>Головне:</b> [Суть події. Опиши про що новина без води, але щоб була чітко зрозуміла суть]
+            
             🏢 <b>Компанії:</b> [#TICKER]
-            📊 <b>Сентимент:</b> [🟢/🔴/🟡]
+            📊 <b>Сентимент:</b> [🟢/🔴/🟡 - вплив на компанію]
             🔥 <b>Важливість:</b> [1-10]/10
-            🧠 <b>Аналіз:</b> [Вплив на ціну акції, логіка руху]
-            📈 <b>Опціонний кут:</b> [IV та стратегії: Iron Condor, Spreads тощо. Пиши простою мовою, як для новачка]
-            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів та короткий вплив на них]
+            
+            🧠 <b>Аналіз:</b> [Вплив на ціну акції, аналіз новини]
+            
+            📈 <b>Опціонний кут:</b> [IV та стратегія: Iron Condor, Spreads тощо тут можеш не прям професійними словами, я поки вчусь і розумію що таке опціони, але якщо дуже специфічні терміни - можу плутатись]
+            
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і вплив на них]
 
             Текст: ${item.title} \n ${fullText}`;
 
             let success = false;
             let attempts = 0;
-            const MAX_AI_ATTEMPTS = 3; // Збільшено до 3-х спроб
+            const MAX_AI_ATTEMPTS = 3; 
 
             while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
@@ -129,18 +134,18 @@ async function run() {
                             body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
                             signal: AbortSignal.timeout(10000)
                         });
-                        console.log("📨 Надіслано в Telegram.");
+                        console.log("📨 Надіслано.");
                     } else {
-                        console.log("⏭️ AI вирішив пропустити (SKIP).");
+                        console.log("⏭️ AI SKIP.");
                     }
                     success = true;
                 } catch (err) {
                     attempts++;
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 15 сек...`);
-                        await new Promise(r => setTimeout(r, 15000));
+                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 20 сек...`);
+                        await new Promise(r => setTimeout(r, 20000));
                     } else {
-                        console.error("❌ Фатальна помилка AI:", err.message);
+                        console.error("❌ Помилка AI:", err.message);
                         success = true; 
                     }
                 }
