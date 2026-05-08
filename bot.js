@@ -3,8 +3,10 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        // SEC вимагає пошту в User-Agent, інакше дає 403
+        'User-Agent': 'Anton Vereta (anton012@gmail.com)', 
         'Accept': 'application/atom+xml, application/xml, text/xml',
+        'Accept-Encoding': 'gzip, deflate'
     },
 });
 
@@ -31,7 +33,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Gemini 3.1 Flash Lite)...");
+        console.log("🚀 Запуск моніторингу (Gemini 3.1 Flash Lite + Anti-Freeze)...");
         let allItems = [];
 
         for (const feedSource of FEEDS) {
@@ -63,7 +65,7 @@ async function run() {
             let fullText = item.contentSnippet || item.description || "";
             if (item.sourceName === 'GoogleNews') {
                 try {
-                    const res = await fetch(`https://r.jina.ai/${item.link}`);
+                    const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(10000) });
                     if (res.ok) {
                         const content = await res.text();
                         fullText = content.slice(0, 8000);
@@ -72,7 +74,6 @@ async function run() {
                 } catch (e) { console.log("⚠️ Тільки сніпет."); }
             }
 
-            // ПАУЗА між новинами
             await new Promise(r => setTimeout(r, 4000));
 
             const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
@@ -95,7 +96,13 @@ async function run() {
             while (!success && attempts < 2) {
                 try {
                     const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
-                    const result = await model.generateContent(prompt);
+                    
+                    // Додаємо примусовий таймаут на виклик Gemini
+                    const result = await Promise.race([
+                        model.generateContent(prompt),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 30000))
+                    ]);
+
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
@@ -103,7 +110,8 @@ async function run() {
                         await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true })
+                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
+                            signal: AbortSignal.timeout(10000)
                         });
                         console.log("📨 Надіслано.");
                     } else {
@@ -112,18 +120,18 @@ async function run() {
                     success = true;
                 } catch (err) {
                     attempts++;
-                    if (err.message.includes("503") || err.message.includes("demand")) {
-                        console.log(`⚠️ 503 Помилка. Спроба ${attempts}/2. Чекаємо 15 сек...`);
+                    if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
+                        console.log(`⚠️ Помилка (${err.message}). Спроба ${attempts}/2. Чекаємо 15 сек...`);
                         await new Promise(r => setTimeout(r, 15000));
                     } else {
                         console.error("❌ Помилка AI:", err.message);
-                        success = true; // Виходимо з циклу при інших помилках
+                        success = true; 
                     }
                 }
             }
         }
         console.log("✅ Всі новини опрацьовано.");
-        process.exit(0); // Обов'язкове завершення, щоб GitHub не висів
+        process.exit(0);
     } catch (error) {
         console.error("💥 Критична помилка:", error);
         process.exit(1);
