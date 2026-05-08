@@ -32,7 +32,7 @@ async function run() {
             
             Новина: ${item.title} — ${item.contentSnippet || item.description}`;
 
-            const model = genAI.getGenerativeModel({ model: "gemini-pro-latest" });
+            const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
             const result = await model.generateContent(prompt);
             const response = result.response.text();
 
