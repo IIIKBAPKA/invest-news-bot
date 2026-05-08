@@ -1,13 +1,8 @@
 const Parser = require('rss-parser');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const parser = new Parser({
-    headers: {
-        'User-Agent': 'InvestAnalyticsBot/1.0 (anton012@gmail.com)', 
-        'Host': 'www.sec.gov',
-        'Accept': 'application/atom+xml, application/xml, text/xml',
-    },
-});
+// Базовий парсер без специфічних заблокованих хедерів
+const parser = new Parser();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
@@ -21,26 +16,38 @@ const TARGET_TICKERS = [
 
 const tickerQuery = TARGET_TICKERS.join(" OR ");
 const FEEDS = [
-    { name: 'GoogleNews', url: `https://news.google.com/rss/search?q=${encodeURIComponent(tickerQuery)}+when:1d&hl=en-US&gl=US` },
-    { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
+    { 
+        name: 'GoogleNews', 
+        url: `https://news.google.com/rss/search?q=${encodeURIComponent(tickerQuery)}+when:1d&hl=en-US&gl=US`,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+    },
+    { 
+        name: 'SEC', 
+        url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom',
+        headers: { 
+            'User-Agent': 'InvestBot/1.0 (anton012@gmail.com)',
+            'Host': 'www.sec.gov'
+        }
+    } 
 ];
 
 const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
-
-const hasTicker = (text) => {
-    return targetRegex.test(text);
-};
+const hasTicker = (text) => targetRegex.test(text);
 
 async function run() {
     try {
-        console.log("Starting monitor (v3.7 Gemini 2.0 Flash Lite)...");
+        console.log("Starting monitor (v3.8 Final Clean)...");
         let allItems = [];
         let sourceStats = {};
 
         for (const feedSource of FEEDS) {
             try {
                 await new Promise(r => setTimeout(r, 2000));
-                const feed = await parser.parseURL(feedSource.url);
+                // Передаємо хедери індивідуально для кожного джерела
+                const feed = await parser.parseURL({
+                    url: feedSource.url,
+                    headers: feedSource.headers
+                });
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
                 allItems = allItems.concat(items);
                 sourceStats[feedSource.name] = items.length;
@@ -85,34 +92,31 @@ async function run() {
             await new Promise(r => setTimeout(r, 5000));
 
             const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
-            Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або ти думаєш що вона особливо неважлива для ринку — відповідай SKIP. Важливо зберігати при відповіді мені формат шаблону
+            Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або вона неважлива — відповідай SKIP. Дотримуйся шаблону.
 
-            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном (без Markdown):
-            🎯 <b>Головне:</b> [Суть події. Опиши про що новина без води, але щоб була чітко зрозуміла суть]
+            КРОК 2: Сформуй звіт (HTML):
+            🎯 <b>Головне:</b> [Суть без води]
             🏢 <b>Компанії:</b> [#TICKER]
-            📊 <b>Сентимент:</b> [🟢/🔴/🟡 - вплив на компанію]
+            📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
-            🧠 <b>Аналіз:</b> [Вплив на ціну акції, аналіз новини]
-            📈 <b>Опціонний кут:</b> [IV та стратегія: Iron Condor, Spreads тощо проста мова]
-            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і вплив на них]
+            🧠 <b>Аналіз:</b> [Вплив на ціну акції]
+            📈 <b>Опціонний кут:</b> [IV та стратегія проста мова]
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів]
 
             Текст: ${item.title} \n ${fullText}`;
 
             let success = false;
             let attempts = 0;
-            const MAX_AI_ATTEMPTS = 3; 
 
-            while (!success && attempts < MAX_AI_ATTEMPTS) {
+            while (!success && attempts < 3) {
                 try {
                     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
-                    
                     const result = await Promise.race([
                         model.generateContent(prompt),
                         new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 40000))
                     ]);
 
                     if (!result || !result.response) throw new Error("EMPTY_RESPONSE");
-
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
@@ -128,24 +132,16 @@ async function run() {
                             signal: AbortSignal.timeout(8000)
                         });
                         console.log("Sent.");
-                    } else {
-                        console.log("AI SKIP.");
-                    }
+                    } else { console.log("AI SKIP."); }
                     success = true;
                 } catch (err) {
                     attempts++;
                     console.error(`AI Error (Attempt ${attempts}): ${err.message}`);
-
-                    if (attempts < MAX_AI_ATTEMPTS && (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT')) {
-                        console.log(`Waiting 12s...`);
-                        await new Promise(r => setTimeout(r, 12000));
-                    } else {
-                        success = true; 
-                    }
+                    if (attempts < 3) await new Promise(r => setTimeout(r, 10000));
+                    else success = true;
                 }
             }
         }
-        console.log("Done.");
         process.exit(0);
     } catch (error) {
         console.error("Critical Error:", error.message);
