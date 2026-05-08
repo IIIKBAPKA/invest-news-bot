@@ -31,7 +31,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.6 Immediate Retry)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.4 Micro-Retries + Fallback)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -63,10 +63,12 @@ async function run() {
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
-        console.log(`\n📊 СТАТИСТИКА:`);
+        console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр: ${uniqueItems.length}\n`);
+        console.log(`- Пройшли фільтр (35хв + Тікер):`);
+        Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
+        console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
         if (uniqueItems.length === 0) {
             console.log("☕ Нових подій немає. Завершуємо.");
@@ -88,7 +90,6 @@ async function run() {
                 } catch (e) { console.log("⚠️ Тільки сніпет (Таймаут або Помилка)."); }
             }
 
-            // Базова пауза між різними новинами, щоб не спамити
             await new Promise(r => setTimeout(r, 4000));
 
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
@@ -99,18 +100,22 @@ async function run() {
 
             КРОК 2: Сформуй звіт (HTML, без Markdown):
             🎯 <b>Головне:</b> [Суть події без води]
+            
             🏢 <b>Компанії:</b> [#TICKER]
             📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
+            
             🧠 <b>Аналіз:</b> [Вплив на ціну акції, логіка руху]
+            
             📈 <b>Опціонний кут:</b> [IV та стратегії: Iron Condor, Spreads тощо. Пиши простою мовою, як для новачка]
+            
             ⚔️ <b>Конкуренти:</b> [Тікери конкурентів та короткий вплив на них]
 
             Текст: ${item.title} \n ${fullText}`;
 
             let success = false;
             let attempts = 0;
-            const MAX_AI_ATTEMPTS = 6; 
+            const MAX_AI_ATTEMPTS = 4; 
 
             while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
@@ -124,7 +129,7 @@ async function run() {
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
-                        // Чистимо HTML від бруду
+                        // ПРОГРАМНЕ ОЧИЩЕННЯ ТЕГІВ: Залишаємо тільки те, що дозволено Telegram
                         const safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u)\b)[^>]+>/gi, '');
 
                         const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${safeResponse}`;
@@ -136,27 +141,34 @@ async function run() {
                         });
                         console.log("📨 Надіслано в Telegram.");
                     } else {
-                        console.log("⏭️ AI SKIP.");
+                        console.log("⏭️ AI вирішив пропустити (SKIP).");
                     }
                     success = true;
                 } catch (err) {
                     attempts++;
-                    // Якщо 503 або таймаут — одразу йдемо на нову ітерацію циклу
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Негайний повтор...`);
+                        const waitTime = 2000; // Фіксована пауза 2 секунд
+                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 2 сек...`);
+                        await new Promise(r => setTimeout(r, waitTime));
                         
                         if (attempts === MAX_AI_ATTEMPTS) {
-                            console.log("⏭️ 6 спроб вичерпано. Відправляємо Fallback.");
+                            console.log("⏭️ Сервер стабільно перевантажений. Відправляємо сирий сніпет новини як Fallback.");
+                            
                             const fallbackMsg = `🔔 <b>Новина (Без аналізу ШІ):</b> <a href="${item.link}">${item.title}</a>\n\n<b>Опис:</b> ${item.contentSnippet || "Опис відсутній"}\n\n<i>⚠️ Аналіз недоступний: сервери ШІ перевантажені (503).</i>`;
                             
                             try {
                                 await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: fallbackMsg, parse_mode: 'HTML', disable_web_page_preview: true })
+                                    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: fallbackMsg, parse_mode: 'HTML', disable_web_page_preview: true }),
+                                    signal: AbortSignal.timeout(10000)
                                 });
-                            } catch (e) { console.error("Fallback error"); }
-                            success = true; 
+                                console.log("📨 Фолбек надіслано в Telegram.");
+                            } catch (fallbackErr) {
+                                console.error("❌ Помилка відправки фолбеку:", fallbackErr.message);
+                            }
+
+                            success = true; // Виходимо з циклу
                         }
                     } else {
                         console.error("❌ Фатальна помилка AI:", err.message);
@@ -165,10 +177,10 @@ async function run() {
                 }
             }
         }
-        console.log("✅ Готово.");
+        console.log("✅ Роботу завершено успішно.");
         process.exit(0);
     } catch (error) {
-        console.error("💥 Критична помилка:", error);
+        console.error("💥 Критична помилка виконання:", error);
         process.exit(1);
     }
 }
