@@ -3,7 +3,6 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        // Офіційна вимога SEC для ідентифікації бота
         'User-Agent': 'InvestAnalyticsBot/1.0 (anton012@gmail.com)',
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
@@ -32,13 +31,12 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.2.2 Optimized Stable)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.2.3 Light Mode)...");
         let allItems = [];
         let sourceStats = {};
 
         for (const feedSource of FEEDS) {
             try {
-                // Невелика пауза між запитами до джерел для стабільності
                 await new Promise(r => setTimeout(r, 2000));
                 const feed = await parser.parseURL(feedSource.url);
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
@@ -66,12 +64,10 @@ async function run() {
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
-        console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
+        console.log(`\n📊 СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр (35хв + Тікер):`);
-        Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
-        console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
+        console.log(`- Пройшли фільтр: ${uniqueItems.length}\n`);
 
         if (uniqueItems.length === 0) {
             console.log("☕ Нових подій немає. Завершуємо.");
@@ -81,24 +77,13 @@ async function run() {
         for (const item of uniqueItems.slice(0, 10)) {
             console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
-            let fullText = item.contentSnippet || item.description || "";
-            if (item.sourceName === 'GoogleNews') {
-                try {
-                    const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
-                    if (res.ok) {
-                        const content = await res.text();
-                        // Оптимізація тексту: видалення зайвих пробілів та обрізка до 4000 симв.
-                        fullText = content
-                            .replace(/\s+/g, ' ')
-                            .slice(0, 4000);
-                        console.log(`✅ Текст завантажено та оптимізовано (${fullText.length} симв.)`);
-                    }
-                } catch (e) { console.log("⚠️ Тільки сніпет (Таймаут або Помилка)."); }
-            }
+            // Тепер використовуємо тільки дані з RSS (заголовок + сніпет)
+            const newsContent = `Заголовок: ${item.title}\nОпис: ${item.contentSnippet || item.description || "Немає опису"}`;
 
-            await new Promise(r => setTimeout(r, 4000));
+            // Пауза між запитами до ШІ для стабільності
+            await new Promise(r => setTimeout(r, 5000));
 
-            const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
+            const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину на основі наданого тексту та заголовку. 
             Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} — відповідай SKIP.
 
             КРОК 2: Сформуй звіт (HTML, без Markdown):
@@ -107,10 +92,11 @@ async function run() {
             📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
             🧠 <b>Аналіз:</b> [Вплив на ціну акції, логіка руху]
-            📈 <b>Опціонний кут:</b> [IV та стратегії: Iron Condor, Spreads тощо. Пиши простою мовою, як для новачка]
-            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів та короткий вплив на них]
+            📈 <b>Опціонний кут:</b> [IV та стратегії: Iron Condor, Spreads тощо. Пиши простою мовою]
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів та короткий вплив]
 
-            Текст: ${item.title} \n ${fullText}`;
+            Новина для аналізу:
+            ${newsContent}`;
 
             let success = false;
             let attempts = 0;
@@ -129,13 +115,24 @@ async function run() {
 
                     if (!response.includes("SKIP")) {
                         const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
-                        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                        
+                        const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
-                            signal: AbortSignal.timeout(10000)
+                            body: JSON.stringify({ 
+                                chat_id: TELEGRAM_CHAT_ID, 
+                                text: message, 
+                                parse_mode: 'HTML', 
+                                disable_web_page_preview: true 
+                            })
                         });
-                        console.log("📨 Надіслано в Telegram.");
+
+                        if (tgRes.ok) {
+                            console.log("📨 Надіслано в Telegram.");
+                        } else {
+                            const errData = await tgRes.json();
+                            console.error(`❌ Помилка Telegram: ${JSON.stringify(errData)}`);
+                        }
                     } else {
                         console.log("⏭️ AI вирішив пропустити (SKIP).");
                     }
