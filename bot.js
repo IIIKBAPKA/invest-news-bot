@@ -1,7 +1,12 @@
 const Parser = require('rss-parser');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const parser = new Parser();
+const parser = new Parser({
+    headers: {
+        'User-Agent': 'InvestBot/1.0 (your-email@example.com)', // Впиши свою пошту
+        'Accept': 'application/atom+xml, application/xml, text/xml',
+    },
+});
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
