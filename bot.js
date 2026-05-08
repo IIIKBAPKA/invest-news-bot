@@ -12,31 +12,43 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
+// Твій портфель
 const TARGET_TICKERS = [
     "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
     "CVX", "XOM", "ADBE", "AMZN", "1VOW3", "KO", "MSFT", 
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
-// Тепер джерела мають свої імена для красивих логів
-// Топові трейдерські джерела (максимум акценту на фондовий ринок) + SEC
+// Список надійних джерел для Google News
+const TRUSTED_SITES = [
+    "investing.com",
+    "benzinga.com",
+];
+
+const sitesQuery = TRUSTED_SITES.map(site => `site:${site}`).join("+OR+");
+const tickerQuery = TARGET_TICKERS.join("+OR+");
+
 const FEEDS = [
-    { name: 'Benzinga', url: 'https://www.benzinga.com/feed' }, 
-    { name: 'Investing', url: 'https://www.investing.com/rss/news_25.rss' },
-    { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
+    { 
+        name: 'GoogleNews', 
+        url: `https://news.google.com/rss/search?q=(${tickerQuery})+AND+(${sitesQuery})+when:1d&hl=en-US&gl=US` 
+    },
+    { 
+        name: 'SEC', 
+        url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' 
+    } 
 ];
 
 const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
 
 async function run() {
     try {
-        console.log("Запуск перевірки новин та SEC документів...");
+        console.log("Запуск перевірки новин (Targeted Google News) та SEC документів...");
         let allItems = [];
 
         for (const feedSource of FEEDS) {
             try {
                 const feed = await parser.parseURL(feedSource.url);
-                // "Клеїмо" ім'я джерела до кожної новини
                 const itemsWithSource = feed.items.map(item => {
                     item.sourceName = feedSource.name;
                     return item;
@@ -70,7 +82,6 @@ async function run() {
             
             if (!isTarget) {
                 skippedByTicker++;
-                // Тепер лог показує, з якого сайту прилетів спам
                 console.log(`[Фільтр] Пропущено [${item.sourceName}]: ${item.title}`);
                 return false;
             }
@@ -89,6 +100,7 @@ async function run() {
             process.exit(0);
         }
 
+        // Дедуплікація за заголовком
         const uniqueItems = Array.from(new Map(recentItems.map(item => [item.title, item])).values());
         console.log(`Знайдено унікальних подій: ${uniqueItems.length}. Починаємо обробку...`);
         
@@ -99,9 +111,9 @@ async function run() {
             
             let fullArticleText = item.contentSnippet || item.description || "";
             
-            // Завантажуємо повний текст ТІЛЬКИ для новин CNBC, документи SEC ШІ проаналізує по заголовку
-            if (item.sourceName === 'CNBC') {
-                console.log(`Завантажуємо повний текст статті CNBC...`);
+            // Завантажуємо повний текст ТІЛЬКИ для новин (SEC аналізуємо по сніпету)
+            if (item.sourceName === 'GoogleNews') {
+                console.log(`Завантажуємо повний текст статті через Jina...`);
                 try {
                     const pageResponse = await fetch(`https://r.jina.ai/${item.link}`);
                     if (pageResponse.ok) {
@@ -110,7 +122,7 @@ async function run() {
                         console.log(`Текст успішно завантажено!`);
                     }
                 } catch (err) {
-                    console.log(`[Попередження] Не вдалося завантажити сайт, аналізуємо короткий сніпет.`);
+                    console.log(`[Попередження] Не вдалося завантажити повний текст, аналізуємо сніпет.`);
                 }
             }
 
@@ -131,12 +143,12 @@ async function run() {
             🔥 <b>Важливість:</b> [1-10]/10
 
             🧠 <b>Аналіз:</b>
-            [Детальний аналіз на основі статті. Як це вплине на ціну акції. Коротко і по суті.]
+            [Детальний аналіз на основі прочитаної статті. Як це вплине на ціну акції. Коротко і по суті.]
 
             📈 <b>Опціонний кут (IV & Strategy):</b>
             [Вплив на IV. Чи варто продавати премію (Iron Condor, Credit Spreads) чи купувати волатильність?]
 
-            ⚔️ <b>Конкуренти:</b> [Хто з конкурентів може виграти/програти, вкажи тікери]
+            ⚔️ <b>Конкуренти:</b> [Тікери через #]
 
             ВАЖЛИВО: Відповідай українською мовою.
             Джерело: ${item.link}
