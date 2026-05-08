@@ -119,7 +119,7 @@ async function run() {
 
             while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
-                    const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
+                    const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
                     
                     const result = await Promise.race([
                         model.generateContent(prompt),
