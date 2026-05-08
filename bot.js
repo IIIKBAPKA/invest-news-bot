@@ -18,14 +18,12 @@ const TARGET_TICKERS = [
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
-// Широкий пошук для Google News
 const tickerQuery = TARGET_TICKERS.join(" OR ");
 const FEEDS = [
     { name: 'GoogleNews', url: `https://news.google.com/rss/search?q=${encodeURIComponent(tickerQuery)}+when:1d&hl=en-US&gl=US` },
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
-// Локальна перевірка наявності тікера (щоб не слати в ШІ зовсім ліві новини)
 const hasTicker = (text) => {
     const upperText = text.toUpperCase();
     return TARGET_TICKERS.some(t => upperText.includes(t));
@@ -46,20 +44,16 @@ async function run() {
         }
 
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
-
-        // 1. Фільтр за часом та тікером
         const filtered = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
             return pubDate > thirtyFiveMinsAgo && hasTicker(item.title + " " + (item.contentSnippet || ""));
         });
 
-        // 2. Дедуплікація за заголовком
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
-
-        console.log(`📊 Статистика: Знайдено ${allItems.length} подій, після фільтрів залишилось ${uniqueItems.length}`);
+        console.log(`📊 Статистика: Знайдено ${allItems.length}, після фільтрів ${uniqueItems.length}`);
 
         if (uniqueItems.length === 0) {
-            console.log("☕ Новин по портфелю за останні 35 хв немає.");
+            console.log("☕ Новин немає.");
             process.exit(0);
         }
 
@@ -67,66 +61,72 @@ async function run() {
             console.log(`----------\nОбробка: ${item.title}`);
             
             let fullText = item.contentSnippet || item.description || "";
-            
-            // Спроба отримати повний текст (тільки для новин)
             if (item.sourceName === 'GoogleNews') {
                 try {
                     const res = await fetch(`https://r.jina.ai/${item.link}`);
                     if (res.ok) {
                         const content = await res.text();
                         fullText = content.slice(0, 8000);
-                        console.log("✅ Повний текст завантажено.");
+                        console.log("✅ Текст завантажено.");
                     }
-                } catch (e) {
-                    console.log("⚠️ Не вдалося завантажити повний текст.");
-                }
+                } catch (e) { console.log("⚠️ Тільки сніпет."); }
             }
 
-            // ПАУЗА 4 сек, щоб не бити RPM ліміт
+            // ПАУЗА між новинами
             await new Promise(r => setTimeout(r, 4000));
 
-            const prompt = `Ти — Senior інвестиційний аналітик. 
-            Проаналізуй новину для трейдера. Якщо вона НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} — відповідай SKIP.
-            
-            Формат відповіді (HTML):
-            🎯 <b>Суть:</b> [Коротко головне]
-            🏢 <b>Тікери:</b> [#TICKER]
-            📊 <b>Сентимент:</b> [🟢/🔴/🟡]
-            📈 <b>Опціонний кут:</b> [Вплив на IV та ідея стратегії]
+            const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
+            Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або ти думаєш що вона особливо неважлива для ринку — відповідай SKIP.
+
+            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном (без Markdown):
+            🎯 <b>Головне:</b> [Суть події. Тут потрібно щоб ти описав про що взагалі ця новина, без води, але щоб була чітко зрозуміла суть]
+            🏢 <b>Компанії:</b> [#TICKER]
+            📊 <b>Сентимент:</b> [🟢/🔴/🟡 - як новина вплине на данну компанію якої стосується]
+            🔥 <b>Важливість:</b> [1-10]/10
+            🧠 <b>Аналіз:</b> [Вплив на ціну акції. Тут так само без води потрібен аналіз новини від тебе, щоб було чітко зрозуміло що до чого]
+            📈 <b>Опціонний кут:</b> [IV та стратегія: Iron Condor, Spreads тощо]
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і як вплине на них коротко]
 
             Текст: ${item.title} \n ${fullText}`;
 
-            try {
-                // ПРАВИЛЬНА МОДЕЛЬ (3.1 Flash Lite)
-                const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
-                const result = await model.generateContent(prompt);
-                const response = result.response.text().trim();
+            let success = false;
+            let attempts = 0;
 
-                if (response.includes("SKIP")) {
-                    console.log("⏭️ AI пропустив новину.");
-                    continue;
+            while (!success && attempts < 2) {
+                try {
+                    const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
+                    const result = await model.generateContent(prompt);
+                    const response = result.response.text().trim();
+
+                    if (!response.includes("SKIP")) {
+                        const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
+                        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true })
+                        });
+                        console.log("📨 Надіслано.");
+                    } else {
+                        console.log("⏭️ AI SKIP.");
+                    }
+                    success = true;
+                } catch (err) {
+                    attempts++;
+                    if (err.message.includes("503") || err.message.includes("demand")) {
+                        console.log(`⚠️ 503 Помилка. Спроба ${attempts}/2. Чекаємо 15 сек...`);
+                        await new Promise(r => setTimeout(r, 15000));
+                    } else {
+                        console.error("❌ Помилка AI:", err.message);
+                        success = true; // Виходимо з циклу при інших помилках
+                    }
                 }
-
-                const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
-                
-                const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        chat_id: TELEGRAM_CHAT_ID,
-                        text: message,
-                        parse_mode: 'HTML',
-                        disable_web_page_preview: true
-                    })
-                });
-
-                if (tgRes.ok) console.log("📨 Надіслано в Telegram.");
-            } catch (err) {
-                console.error("❌ Помилка AI:", err.message);
             }
         }
+        console.log("✅ Всі новини опрацьовано.");
+        process.exit(0); // Обов'язкове завершення, щоб GitHub не висів
     } catch (error) {
         console.error("💥 Критична помилка:", error);
+        process.exit(1);
     }
 }
 
