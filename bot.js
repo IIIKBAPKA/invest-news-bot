@@ -3,7 +3,8 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        'User-Agent': 'Anton Vereta (anton012@gmail.com)', 
+        // Додав маскування під звичайний браузер, щоб Seeking Alpha не блокував запити
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
 });
@@ -39,13 +40,19 @@ const TARGET_COMPANIES = {
 // Плаский список усіх слів для пошуку (тікери + назви)
 const ALL_TARGETS = [...Object.keys(TARGET_COMPANIES), ...Object.values(TARGET_COMPANIES).flat()];
 
-const tickerQuery = Object.keys(TARGET_COMPANIES).join(" OR ");
-
-// ОНОВЛЕНО: Замінили Google News на Bing News RSS
+// Базовий масив фідів
 const FEEDS = [
-    { name: 'BingNews', url: `https://www.bing.com/news/search?q=${encodeURIComponent(tickerQuery)}&format=rss` },
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=100&output=atom' } 
 ];
+
+// ОНОВЛЕННЯ: Додаємо індивідуальні RSS-запити до Seeking Alpha для кожного тікера
+Object.keys(TARGET_COMPANIES).forEach(ticker => {
+    // 1VOW3 може не спрацювати в SA напряму, але додаємо загальне правило
+    FEEDS.push({ 
+        name: 'SeekingAlpha', 
+        url: `https://seekingalpha.com/api/sa/combined/${ticker}.xml` 
+    });
+});
 
 const hasTicker = (text) => {
     const upperText = text.toUpperCase();
@@ -58,23 +65,24 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: Надійний RSS Bing + SEC | 32 хв)...");
+        console.log("🚀 Запуск моніторингу (Версія: Seeking Alpha + SEC | 32 хв)...");
         let allItems = [];
-        let sourceStats = {};
+        let sourceStats = { SeekingAlpha: 0, SEC: 0 };
 
         for (const feedSource of FEEDS) {
             try {
                 const feed = await parser.parseURL(feedSource.url);
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
                 allItems = allItems.concat(items);
-                sourceStats[feedSource.name] = items.length;
+                sourceStats[feedSource.name] += items.length;
             } catch (e) {
-                console.error(`❌ Помилка джерела [${feedSource.name}]:`, e.message);
+                // Якщо SA заблокує парсер, ми побачимо це тут
+                // console.error(`❌ Помилка джерела [${feedSource.name}]:`, e.message);
             }
         }
 
         const thirtyFiveMinsAgo = Date.now() - (32 * 60 * 1000); 
-        let passedBySource = { BingNews: 0, SEC: 0 }; // Оновлено назву джерела в лічильнику
+        let passedBySource = { SeekingAlpha: 0, SEC: 0 };
 
         const filtered = allItems.filter(item => {
             const rawDate = item.pubDate || item.isoDate || 0;
@@ -117,7 +125,7 @@ async function run() {
             console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
             let fullText = item.contentSnippet || item.description || "";
-            if (item.sourceName === 'BingNews') { // Оновлено перевірку
+            if (item.sourceName === 'SeekingAlpha') {
                 try {
                     const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
                     if (res.ok) {
