@@ -31,7 +31,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.2 Stable + Fail-Fast)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.3 Stable + Fallback)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -95,6 +95,9 @@ async function run() {
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
             Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} або новина якась дуже неважлива — відповідай SKIP.
 
+            ВАЖЛИВО: Використовуй ТІЛЬКИ теги <b>, <i>, <a>, <code>, <s>, <u>. 
+            КАТЕГОРИЧНО ЗАБОРОНЕНО використовувати <div>, <span>, <p>, <ul>, <li>, <br>, або переноси рядків через HTML. Не використовуй Markdown (**).
+
             КРОК 2: Сформуй звіт (HTML, без Markdown):
             🎯 <b>Головне:</b> [Суть події без води]
             
@@ -140,15 +143,30 @@ async function run() {
                     success = true;
                 } catch (err) {
                     attempts++;
-                    // Ось тут виправлено обірваний код:
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
                         const waitTime = attempts === 1 ? 15000 : 30000;
                         console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо ${waitTime / 1000} сек...`);
                         await new Promise(r => setTimeout(r, waitTime));
                         
                         if (attempts === MAX_AI_ATTEMPTS) {
-                            console.log("⏭️ Сервер перевантажений. Пропускаємо новину для економії лімітів.");
-                            success = true; // Виходимо з циклу
+                            console.log("⏭️ Сервер перевантажений. Відправляємо сирий сніпет новини як Fallback.");
+                            
+                            // ФОРМУВАННЯ FALLBACK ПОВІДОМЛЕННЯ
+                            const fallbackMsg = `🔔 <b>Новина (Без аналізу ШІ):</b> <a href="${item.link}">${item.title}</a>\n\n<b>Опис:</b> ${item.contentSnippet || "Опис відсутній"}\n\n<i>⚠️ Аналіз недоступний: сервери ШІ перевантажені (503).</i>`;
+                            
+                            try {
+                                await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: fallbackMsg, parse_mode: 'HTML', disable_web_page_preview: true }),
+                                    signal: AbortSignal.timeout(10000)
+                                });
+                                console.log("📨 Фолбек надіслано в Telegram.");
+                            } catch (fallbackErr) {
+                                console.error("❌ Помилка відправки фолбеку:", fallbackErr.message);
+                            }
+
+                            success = true; // Виходимо з циклу, новину оброблено (хоч і без ШІ)
                         }
                     } else {
                         console.error("❌ Фатальна помилка AI:", err.message);
