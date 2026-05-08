@@ -90,7 +90,7 @@ async function run() {
                 } catch (e) { console.log("⚠️ Тільки сніпет (Таймаут або Помилка)."); }
             }
 
-            await new Promise(r => setTimeout(r, 4000));
+            await new Promise(r => setTimeout(r, 2000));
 
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
             Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} або новина якась дуже неважлива — відповідай SKIP.
