@@ -32,7 +32,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.4 Extreme Stability)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.5 Debug Mode)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -67,12 +67,10 @@ async function run() {
         console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр (35хв + Тікер):`);
-        Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
-        console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
+        console.log(`- Пройшли фільтр: ${uniqueItems.length}\n`);
 
         if (uniqueItems.length === 0) {
-            console.log("☕ Нових подій немає.");
+            console.log("☕ Нових подій немає. Вихід.");
             process.exit(0);
         }
 
@@ -82,33 +80,29 @@ async function run() {
             let fullText = item.contentSnippet || item.description || "";
             if (item.sourceName === 'GoogleNews') {
                 try {
-                    const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
+                    // Таймаут на запит тексту 10 сек
+                    const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(10000) });
                     if (res.ok) {
                         const content = await res.text();
-                        // ЗМЕНШЕНО ДО 2500 СИМВОЛІВ для стабільності на Free Tier
-                        fullText = content.slice(0, 2500);
-                        console.log("✅ Текст оптимізовано (2.5k).");
+                        fullText = content.slice(0, 4000); 
+                        console.log("✅ Текст завантажено.");
                     }
                 } catch (e) { console.log("⚠️ Тільки сніпет."); }
             }
 
-            // ПАУЗА 8 СЕКУНД (Cool-down)
-            await new Promise(r => setTimeout(r, 8000));
+            // Фіксована пауза 5 сек між новинами
+            await new Promise(r => setTimeout(r, 5000));
 
             const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
             Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або ти думаєш що вона особливо неважлива для ринку — відповідай SKIP. Важливо зберігати при відповіді мені формат шаблону
 
             КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном (без Markdown):
             🎯 <b>Головне:</b> [Суть події. Опиши про що новина без води, але щоб була чітко зрозуміла суть]
-            
             🏢 <b>Компанії:</b> [#TICKER]
             📊 <b>Сентимент:</b> [🟢/🔴/🟡 - вплив на компанію]
             🔥 <b>Важливість:</b> [1-10]/10
-            
             🧠 <b>Аналіз:</b> [Вплив на ціну акції, аналіз новини]
-            
             📈 <b>Опціонний кут:</b> [IV та стратегія: Iron Condor, Spreads тощо тут можеш не прям професійними словами, я поки вчусь і розумію що таке опціони, але якщо дуже специфічні терміни - можу плутатись]
-            
             ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і вплив на них]
 
             Текст: ${item.title} \n ${fullText}`;
@@ -123,18 +117,24 @@ async function run() {
                     
                     const result = await Promise.race([
                         model.generateContent(prompt),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 45000))
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 35000))
                     ]);
+
+                    if (!result || !result.response) throw new Error("EMPTY_RESPONSE");
 
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
-                        const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
                         await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
-                            signal: AbortSignal.timeout(12000)
+                            body: JSON.stringify({ 
+                                chat_id: TELEGRAM_CHAT_ID, 
+                                text: `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`, 
+                                parse_mode: 'HTML', 
+                                disable_web_page_preview: true 
+                            }),
+                            signal: AbortSignal.timeout(8000)
                         });
                         console.log("📨 Надіслано.");
                     } else {
@@ -143,22 +143,23 @@ async function run() {
                     success = true;
                 } catch (err) {
                     attempts++;
-                    if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        // ЕКСПОНЕНЦІАЛЬНЕ ОЧІКУВАННЯ: 30, 60 секунд
-                        const waitTime = attempts * 30000;
-                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо ${waitTime/1000} сек...`);
-                        await new Promise(r => setTimeout(r, waitTime));
+                    // Виводимо конкретну помилку для дебагу
+                    console.error(`❌ Помилка AI (Спроба ${attempts}): ${err.message}`);
+
+                    if (attempts < MAX_AI_ATTEMPTS && (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT')) {
+                        // Фіксована пауза 12 сек при помилці
+                        console.log(`⚠️ Очікуємо 12 сек перед ретраєм...`);
+                        await new Promise(r => setTimeout(r, 12000));
                     } else {
-                        console.error("❌ Помилка AI:", err.message);
-                        success = true; 
+                        success = true; // Вихід з циклу, якщо спроби вичерпано або помилка фатальна
                     }
                 }
             }
         }
-        console.log("✅ Роботу завершено успішно.");
+        console.log("✅ Роботу завершено.");
         process.exit(0);
     } catch (error) {
-        console.error("💥 Критична помилка виконання:", error);
+        console.error("💥 Критична помилка:", error);
         process.exit(1);
     }
 }
