@@ -11,6 +11,7 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 5  # ЦЕ ОБОВ'ЯЗКОВО
     steps:
       - name: Checkout
         uses: actions/checkout@v4
