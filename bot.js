@@ -24,14 +24,15 @@ const FEEDS = [
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
-const hasTicker = (text) => {
-    const upperText = text.toUpperCase();
-    return TARGET_TICKERS.some(t => upperText.includes(t));
+// Покращений пошук: спочатку заголовок, потім опис
+const hasTicker = (item) => {
+    const textToSearch = `${item.title} ${item.contentSnippet || item.description || ""}`.toUpperCase();
+    return TARGET_TICKERS.some(t => textToSearch.includes(t));
 };
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.2.3 Light Mode)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.2.5 FIX-HTML)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -53,7 +54,7 @@ async function run() {
         const filtered = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
             const isFresh = pubDate > thirtyFiveMinsAgo;
-            const isTarget = hasTicker(item.title + " " + (item.contentSnippet || ""));
+            const isTarget = hasTicker(item); // Використовуємо покращений пошук
             
             if (isFresh && isTarget) {
                 passedBySource[item.sourceName]++;
@@ -77,32 +78,32 @@ async function run() {
         for (const item of uniqueItems.slice(0, 10)) {
             console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
-            // Тепер використовуємо тільки дані з RSS (заголовок + сніпет)
-            const newsContent = `Заголовок: ${item.title}\nОпис: ${item.contentSnippet || item.description || "Немає опису"}`;
+            const newsContent = `Джерело: ${item.sourceName}\nЗаголовок: ${item.title}\nОпис: ${item.contentSnippet || item.description || "Опис відсутній"}`;
 
-            // Пауза між запитами до ШІ для стабільності
-            await new Promise(r => setTimeout(r, 5000));
+            await new Promise(r => setTimeout(r, 6000));
 
-            const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину на основі наданого тексту та заголовку. 
+            const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
             Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} — відповідай SKIP.
 
-            КРОК 2: Сформуй звіт (HTML, без Markdown):
-            🎯 <b>Головне:</b> [Суть події без води]
+            ВАЖЛИВО: Використовуй ТІЛЬКИ теги <b>, <i>, <a>, <code>. 
+            ЗАБОРОНЕНО використовувати <div>, <span>, <p>, <ul>, <li>.
+
+            КРОК 2: Сформуй звіт СУВОРО за шаблоном:
+            🎯 <b>Головне:</b> [Суть події]
             🏢 <b>Компанії:</b> [#TICKER]
             📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
-            🧠 <b>Аналіз:</b> [Вплив на ціну акції, логіка руху]
-            📈 <b>Опціонний кут:</b> [IV та стратегії: Iron Condor, Spreads тощо. Пиши простою мовою]
-            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів та короткий вплив]
+            🧠 <b>Аналіз:</b> [Вплив на ціну]
+            📈 <b>Опціонний кут:</b> [IV та стратегія]
+            ⚔️ <b>Конкуренти:</b> [Тікери]
 
-            Новина для аналізу:
+            Дані:
             ${newsContent}`;
 
             let success = false;
             let attempts = 0;
-            const MAX_AI_ATTEMPTS = 3; 
 
-            while (!success && attempts < MAX_AI_ATTEMPTS) {
+            while (!success && attempts < 3) {
                 try {
                     const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
                     
@@ -128,31 +129,30 @@ async function run() {
                         });
 
                         if (tgRes.ok) {
-                            console.log("📨 Надіслано в Telegram.");
+                            console.log("📨 Надіслано.");
                         } else {
                             const errData = await tgRes.json();
-                            console.error(`❌ Помилка Telegram: ${JSON.stringify(errData)}`);
+                            console.error(`❌ Помилка Telegram: ${errData.description}`);
                         }
                     } else {
-                        console.log("⏭️ AI вирішив пропустити (SKIP).");
+                        console.log("⏭️ AI SKIP.");
                     }
                     success = true;
                 } catch (err) {
                     attempts++;
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 15 сек...`);
+                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/3). Чекаємо 15 сек...`);
                         await new Promise(r => setTimeout(r, 15000));
                     } else {
-                        console.error(`❌ Фатальна помилка AI: ${err.message}`);
+                        console.error(`❌ Помилка: ${err.message}`);
                         success = true; 
                     }
                 }
             }
         }
-        console.log("✅ Роботу завершено успішно.");
         process.exit(0);
     } catch (error) {
-        console.error("💥 Критична помилка виконання:", error);
+        console.error("💥 Критична помилка:", error);
         process.exit(1);
     }
 }
