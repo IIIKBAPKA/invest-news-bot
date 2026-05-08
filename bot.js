@@ -24,15 +24,17 @@ const FEEDS = [
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
-// Покращений пошук: спочатку заголовок, потім опис
+// Використовуємо регулярні вирази для точного пошуку тікерів як окремих слів
+const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
+
 const hasTicker = (item) => {
-    const textToSearch = `${item.title} ${item.contentSnippet || item.description || ""}`.toUpperCase();
-    return TARGET_TICKERS.some(t => textToSearch.includes(t));
+    const textToSearch = `${item.title} ${item.contentSnippet || item.description || ""}`;
+    return targetRegex.test(textToSearch);
 };
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.2.5 FIX-HTML)...");
+        console.log("🚀 Запуск моніторингу (v3.2.7 - Custom Prompt Fixed)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -49,18 +51,10 @@ async function run() {
         }
 
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
-        let passedBySource = { GoogleNews: 0, SEC: 0 };
-
+        
         const filtered = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
-            const isFresh = pubDate > thirtyFiveMinsAgo;
-            const isTarget = hasTicker(item); // Використовуємо покращений пошук
-            
-            if (isFresh && isTarget) {
-                passedBySource[item.sourceName]++;
-                return true;
-            }
-            return false;
+            return pubDate > thirtyFiveMinsAgo && hasTicker(item);
         });
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
@@ -82,20 +76,23 @@ async function run() {
 
             await new Promise(r => setTimeout(r, 6000));
 
+            // Твій промпт БЕЗ ЗМІН
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
-            Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} — відповідай SKIP.
+            Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} або ти вважаєш що вона неважлива — відповідай SKIP. Важливо збережи структуру шаблону
 
             ВАЖЛИВО: Використовуй ТІЛЬКИ теги <b>, <i>, <a>, <code>. 
             ЗАБОРОНЕНО використовувати <div>, <span>, <p>, <ul>, <li>.
 
             КРОК 2: Сформуй звіт СУВОРО за шаблоном:
-            🎯 <b>Головне:</b> [Суть події]
+            🎯 <b>Головне:</b> [Суть події новини, без зайвої води, але з точно зрозумілою суттю цієї новини і чого вона стосується]
+            
             🏢 <b>Компанії:</b> [#TICKER]
             📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
-            🧠 <b>Аналіз:</b> [Вплив на ціну]
-            📈 <b>Опціонний кут:</b> [IV та стратегія]
-            ⚔️ <b>Конкуренти:</b> [Тікери]
+            
+            🧠 <b>Аналіз:</b> [Аналіз від ШІ на що впливає данна новина]
+            📈 <b>Опціонний кут:</b> [IV та стратегія, простими словами для новачка в опціонах]
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і як на них вплине]
 
             Дані:
             ${newsContent}`;
