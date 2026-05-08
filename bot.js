@@ -46,11 +46,12 @@ async function run() {
             }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (60 * 60 * 1000);
+        const thirtyFiveMinsAgo = Date.now() - (60 * 60 * 1000); // Залишив 60 хв як ти міняв
         let passedBySource = { GoogleNews: 0, SEC: 0 };
 
         const filtered = allItems.filter(item => {
-            const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
+            const rawDate = item.pubDate || item.isoDate || 0;
+            const pubDate = new Date(rawDate).getTime();
             const isFresh = pubDate > thirtyFiveMinsAgo;
             const isTarget = hasTicker(item.title + " " + (item.contentSnippet || ""));
             
@@ -61,11 +62,12 @@ async function run() {
             return false;
         });
 
-        // --- ДОДАНИЙ БЛОК: Вивід усіх новин, що пройшли фільтр ---
+        // --- ОНОВЛЕНИЙ БЛОК: Вивід новин з часом публікації ---
         if (filtered.length > 0) {
             console.log(`\n🔍 СПИСОК УСІХ ЗНАЙДЕНИХ НОВИН (ДО ДЕДУПЛІКАЦІЇ):`);
             filtered.forEach((item, idx) => {
-                console.log(`${idx + 1}. [${item.sourceName}] ${item.title}`);
+                const timeStr = item.pubDate || item.isoDate || "Невідомий час";
+                console.log(`${idx + 1}. [${item.sourceName}] [${timeStr}] ${item.title}`);
             });
         }
         // --------------------------------------------------------
@@ -75,7 +77,7 @@ async function run() {
         console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр (35хв + Тікер):`);
+        console.log(`- Пройшли фільтр (Час + Тікер):`);
         Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
         console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
@@ -104,11 +106,7 @@ async function run() {
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
             Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} або новина якась дуже неважлива — відповідай SKIP.
 
-            ВАЖЛИВО: Пиши ТІЛЬКИ чистий текст, але зі смайлами і тегами шаблону (головне щоб telegram його прийняв). 
-            КАТЕГОРИЧНО ЗАБОРОНЕНО: 
-            - Використовувати будь-які HTML теги (<b>, <i>, <div> тощо).
-            - Використовувати Markdown (**, #, -, •).
-            - Використовувати переноси рядків через <br>.
+            ВАЖЛИВО: Пиши ТІЛЬКИ чистий текст, але зі смайлами і тегами шаблону (головне щоб цей синтаксис telegram прийняв). 
 
             КРОК 2: Сформуй звіт (HTML, без Markdown):
             🎯 <b>Головне:</b> [Суть події без води]
@@ -141,10 +139,8 @@ async function run() {
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
-                        // 1. Очищення від заборонених тегів
                         let safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u)\b)[^>]+>/gi, '');
 
-                        // 2. ФІКС ДЛЯ TELEGRAM: Автоматичне закриття «забутих» тегів
                         const tags = ['b', 'i', 'a', 'code', 's', 'u'];
                         tags.forEach(tag => {
                             const opened = (safeResponse.match(new RegExp(`<${tag}(\\s|>|/)`, 'g')) || []).length;
@@ -181,9 +177,8 @@ async function run() {
                 } catch (err) {
                     attempts++;
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        const waitTime = 2000; 
                         console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 2 сек...`);
-                        await new Promise(r => setTimeout(r, waitTime));
+                        await new Promise(r => setTimeout(r, 2000));
                         
                         if (attempts === MAX_AI_ATTEMPTS) {
                             console.log("⏭️ Сервер стабільно перевантажений. Відправляємо Fallback.");
