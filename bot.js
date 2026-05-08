@@ -18,21 +18,22 @@ const TARGET_TICKERS = [
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
+// Широкий пошук для Google News
 const tickerQuery = TARGET_TICKERS.join(" OR ");
 const FEEDS = [
     { name: 'GoogleNews', url: `https://news.google.com/rss/search?q=${encodeURIComponent(tickerQuery)}+when:1d&hl=en-US&gl=US` },
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
-// Спрощений пошук: просто наявність тікера в тексті
-const isTargetCompany = (text) => {
+// Локальна перевірка наявності тікера (щоб не слати в ШІ зовсім ліві новини)
+const hasTicker = (text) => {
     const upperText = text.toUpperCase();
-    return TARGET_TICKERS.some(t => upperText.includes(t)) || upperText.includes("MARKET");
+    return TARGET_TICKERS.some(t => upperText.includes(t));
 };
 
 async function run() {
     try {
-        console.log("🚀 Запуск фінального снайпер-бота...");
+        console.log("🚀 Запуск моніторингу (Gemini 3.1 Flash Lite)...");
         let allItems = [];
 
         for (const feedSource of FEEDS) {
@@ -40,71 +41,75 @@ async function run() {
                 const feed = await parser.parseURL(feedSource.url);
                 allItems = allItems.concat(feed.items.map(i => ({ ...i, sourceName: feedSource.name })));
             } catch (e) {
-                console.error(`❌ Помилка [${feedSource.name}]:`, e.message);
+                console.error(`❌ Помилка джерела [${feedSource.name}]:`, e.message);
             }
         }
 
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
-        let processedCount = 0;
 
-        // Фільтруємо ТІЛЬКИ за часом та базовою наявністю тікера
-        const filteredItems = allItems.filter(item => {
+        // 1. Фільтр за часом та тікером
+        const filtered = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
-            return pubDate > thirtyFiveMinsAgo && isTargetCompany(item.title + " " + (item.contentSnippet || ""));
+            return pubDate > thirtyFiveMinsAgo && hasTicker(item.title + " " + (item.contentSnippet || ""));
         });
 
-        console.log(`✅ Знайдено ${filteredItems.length} потенційних новин за 35 хв.`);
+        // 2. Дедуплікація за заголовком
+        const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
-        if (filteredItems.length === 0) {
-            console.log("☕ Новин немає. Відпочиваємо.");
+        console.log(`📊 Статистика: Знайдено ${allItems.length} подій, після фільтрів залишилось ${uniqueItems.length}`);
+
+        if (uniqueItems.length === 0) {
+            console.log("☕ Новин по портфелю за останні 35 хв немає.");
             process.exit(0);
         }
 
-        // Видаляємо дублікати
-        const uniqueItems = Array.from(new Map(filteredItems.map(item => [item.title, item])).values()).slice(0, 7);
-
-        for (const item of uniqueItems) {
-            processedCount++;
-            console.log(`\n[${processedCount}] Аналізуємо: ${item.title}`);
+        for (const item of uniqueItems.slice(0, 10)) {
+            console.log(`----------\nОбробка: ${item.title}`);
             
-            let fullContent = item.contentSnippet || item.description || "";
+            let fullText = item.contentSnippet || item.description || "";
             
-            // Спроба отримати повний текст через Jina
-            try {
-                const jinaUrl = `https://r.jina.ai/${item.link}`;
-                const res = await fetch(jinaUrl);
-                if (res.ok) {
-                    const text = await res.text();
-                    fullContent = text.slice(0, 10000);
-                    console.log("   📄 Повний текст отримано.");
+            // Спроба отримати повний текст (тільки для новин)
+            if (item.sourceName === 'GoogleNews') {
+                try {
+                    const res = await fetch(`https://r.jina.ai/${item.link}`);
+                    if (res.ok) {
+                        const content = await res.text();
+                        fullText = content.slice(0, 8000);
+                        console.log("✅ Повний текст завантажено.");
+                    }
+                } catch (e) {
+                    console.log("⚠️ Не вдалося завантажити повний текст.");
                 }
-            } catch (e) {
-                console.log("   ⚠️ Тільки превью.");
             }
 
-            const prompt = `Ти — Senior аналітик. Проаналізуй новину для трейдера опціонами.
-            Якщо це не впливає на ринок або тікери ${TARGET_TICKERS.join(', ')} — пиши SKIP.
-            Інакше дай звіт (HTML):
-            🎯 <b>Суть:</b> ...
-            🏢 <b>Тікери:</b> #TICKER
-            📊 <b>Сентимент:</b> 🟢/🔴/🟡
-            📈 <b>Стратегія:</b> (IV, Spreads, etc.)
+            // ПАУЗА 4 сек, щоб не бити RPM ліміт
+            await new Promise(r => setTimeout(r, 4000));
+
+            const prompt = `Ти — Senior інвестиційний аналітик. 
+            Проаналізуй новину для трейдера. Якщо вона НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} — відповідай SKIP.
             
-            Текст: ${item.title} \n ${fullContent}`;
+            Формат відповіді (HTML):
+            🎯 <b>Суть:</b> [Коротко головне]
+            🏢 <b>Тікери:</b> [#TICKER]
+            📊 <b>Сентимент:</b> [🟢/🔴/🟡]
+            📈 <b>Опціонний кут:</b> [Вплив на IV та ідея стратегії]
+
+            Текст: ${item.title} \n ${fullText}`;
 
             try {
-                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Використовуємо 1.5 для стабільності лімітів
+                // ПРАВИЛЬНА МОДЕЛЬ (3.1 Flash Lite)
+                const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
                 const result = await model.generateContent(prompt);
                 const response = result.response.text().trim();
 
                 if (response.includes("SKIP")) {
-                    console.log("   ⏭️ AI пропустив (неважливо).");
+                    console.log("⏭️ AI пропустив новину.");
                     continue;
                 }
 
-                const message = `🔔 <b>Новина</b>\n<a href="${item.link}">${item.title}</a>\n\n${response}`;
+                const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
                 
-                await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -114,14 +119,14 @@ async function run() {
                         disable_web_page_preview: true
                     })
                 });
-                console.log("   ✅ Надіслано в TG!");
-                await new Promise(r => setTimeout(r, 5000)); // Пауза для лімітів TG
+
+                if (tgRes.ok) console.log("📨 Надіслано в Telegram.");
             } catch (err) {
-                console.error("   ❌ Помилка AI:", err.message);
+                console.error("❌ Помилка AI:", err.message);
             }
         }
     } catch (error) {
-        console.error("Критична помилка:", error);
+        console.error("💥 Критична помилка:", error);
     }
 }
 
