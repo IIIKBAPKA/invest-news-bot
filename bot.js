@@ -31,7 +31,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.3 Stable + Fallback)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.4 Micro-Retries + Fallback)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -115,7 +115,7 @@ async function run() {
 
             let success = false;
             let attempts = 0;
-            const MAX_AI_ATTEMPTS = 2; // Fail-fast для збереження лімітів
+            const MAX_AI_ATTEMPTS = 6; // 6 спроб по 5 секунд = 30 секунд
 
             while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
@@ -129,7 +129,10 @@ async function run() {
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
-                        const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
+                        // ПРОГРАМНЕ ОЧИЩЕННЯ ТЕГІВ: Залишаємо тільки те, що дозволено Telegram
+                        const safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u)\b)[^>]+>/gi, '');
+
+                        const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${safeResponse}`;
                         await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -144,14 +147,13 @@ async function run() {
                 } catch (err) {
                     attempts++;
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        const waitTime = attempts === 1 ? 15000 : 30000;
-                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо ${waitTime / 1000} сек...`);
+                        const waitTime = 5000; // Фіксована пауза 5 секунд
+                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 5 сек...`);
                         await new Promise(r => setTimeout(r, waitTime));
                         
                         if (attempts === MAX_AI_ATTEMPTS) {
-                            console.log("⏭️ Сервер перевантажений. Відправляємо сирий сніпет новини як Fallback.");
+                            console.log("⏭️ Сервер стабільно перевантажений. Відправляємо сирий сніпет новини як Fallback.");
                             
-                            // ФОРМУВАННЯ FALLBACK ПОВІДОМЛЕННЯ
                             const fallbackMsg = `🔔 <b>Новина (Без аналізу ШІ):</b> <a href="${item.link}">${item.title}</a>\n\n<b>Опис:</b> ${item.contentSnippet || "Опис відсутній"}\n\n<i>⚠️ Аналіз недоступний: сервери ШІ перевантажені (503).</i>`;
                             
                             try {
@@ -166,7 +168,7 @@ async function run() {
                                 console.error("❌ Помилка відправки фолбеку:", fallbackErr.message);
                             }
 
-                            success = true; // Виходимо з циклу, новину оброблено (хоч і без ШІ)
+                            success = true; // Виходимо з циклу
                         }
                     } else {
                         console.error("❌ Фатальна помилка AI:", err.message);
