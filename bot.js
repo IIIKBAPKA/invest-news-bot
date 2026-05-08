@@ -12,26 +12,22 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
+// Твій портфель. Тепер ми передаємо його безпосередньо в мозок ШІ
 const TARGET_TICKERS = [
     "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
-    "O", "CVX", "XOM", "ADBE", "AMZN", "1VOW3", "KO", "MSFT", 
+    "CVX", "XOM", "ADBE", "AMZN", "1VOW3", "KO", "MSFT", 
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
-const tickerQuery = TARGET_TICKERS.join("+OR+");
-
-// Спрощений запит до Google News (без обмежень по сайтах, щоб не ламався пошук) та SEC
+// Перейшли на професійне джерело (MarketWatch) + SEC
 const FEEDS = [
-    `https://news.google.com/rss/search?q=(${tickerQuery})+when:1d&hl=en-US&gl=US`,
+    'https://feeds.marketwatch.com/marketwatch/topstories',
     'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' 
 ];
 
-// Створюємо регулярний вираз для пошуку ТОЧНИХ слів (щоб уникнути багу з літерою O)
-const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')}|MARKET)\\b`, 'i');
-
 async function run() {
     try {
-        console.log("Запуск перевірки новин та SEC документів...");
+        console.log("Запуск перевірки новин (MarketWatch) та SEC документів...");
         let allItems = [];
 
         for (const url of FEEDS) {
@@ -39,29 +35,22 @@ async function run() {
                 const feed = await parser.parseURL(url);
                 allItems = allItems.concat(feed.items);
             } catch (e) {
-                console.error(`Помилка парсингу джерела:`, e.message);
+                console.error(`Помилка парсингу джерела ${url}:`, e.message);
             }
         }
 
+        // Для тестування можна поставити 24 години (24 * 60 * 60 * 1000)
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);    
         
         const recentItems = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate).getTime();
             const titleUpper = item.title.toUpperCase();
-            const content = item.title + " " + (item.contentSnippet || "");
             
             // Фільтруємо технічний спам від банків
             if (titleUpper.includes("424B2")) return false;
 
-            // МАГІЯ REGEX: Шукаємо тільки окремі слова, а не частини слів
-            const isTarget = targetRegex.test(content);
-            
-            if (pubDate > thirtyFiveMinsAgo && !isTarget) {
-                // Вимкнув логування пропущених, щоб не спамило тисячами рядків від SEC
-                // console.log(`[Фільтр тікерів] Пропущено: ${item.title}`);
-            }
-            
-            return pubDate > thirtyFiveMinsAgo && isTarget;
+            // Більше ніяких regex для тікерів! Беремо всі свіжі новини.
+            return pubDate > thirtyFiveMinsAgo;
         });
 
         if (recentItems.length === 0) {
@@ -70,29 +59,37 @@ async function run() {
         }
 
         const uniqueItems = Array.from(new Map(recentItems.map(item => [item.title, item])).values());
-        console.log(`Знайдено унікальних подій: ${uniqueItems.length}`);
+        console.log(`Знайдено унікальних подій для аналізу ШІ: ${uniqueItems.length}`);
         
-        const itemsToProcess = uniqueItems.slice(0, 10); 
+        // Збільшили ліміт обробки, щоб ШІ міг перевірити більше новин
+        const itemsToProcess = uniqueItems.slice(0, 15); 
 
         for (const item of itemsToProcess) {
             console.log(`----------\nОброблюємо: ${item.title}`);
             
+            // Затримка ПЕРЕД запитом до ШІ (щоб не перевищити ліміт 15 запитів/хвилина на Free Tier)
+            await new Promise(res => setTimeout(res, 4000));
+
             const prompt = `Ти — Senior інвестиційний аналітик та експерт з торгівлі опціонами. 
-            Твоє завдання: проаналізувати новину або офіційний документ SEC.
+            Ось список акцій, за якими я слідкую: ${TARGET_TICKERS.join(', ')}.
 
-            КРОК 1 (ФІЛЬТР): Якщо це несуттєва технічна новина, клікбейт або рутинний звіт, що не впливає на ціну — відповідай: SKIP.
-            Особлива увага SEC Filings: Форма 4 (інсайдери), 8-K (важливі події), 10-Q/K (звіти) — це ВАЖЛИВО.
+            Твоє завдання: проаналізувати новину або документ SEC.
 
-            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном. Не використовуй Markdown (** чи *). Заповни дані в дужках [...]:
+            КРОК 1 (ФІЛЬТР СУВОРОСТІ): 
+            - Якщо новина НЕ стосується жодної компанії з мого списку І НЕ є критичною макроекономічною подією (ФРС, інфляція, ринок праці США) — відповідай лише одним словом: SKIP.
+            - Якщо це просто щоденні незначні коливання, "вода" або загальна аналітика без конкретики — відповідай: SKIP.
+            - Форми SEC: Форма 4 (інсайдери), 8-K, 10-Q/K для моїх компаній — це завжди ВАЖЛИВО.
+
+            КРОК 2: Якщо новина дійсно важлива для мене, сформуй звіт СУВОРО за HTML-шаблоном. Не використовуй Markdown (** чи *). Заповни дані в дужках [...]:
 
             🎯 <b>Головне:</b> [Суть події. Якщо це SEC — вкажи тип форми та хто здійснив дію]
 
-            🏢 <b>Компанії:</b> [Тікери: #NVDA, #GOOG, #VST тощо]
+            🏢 <b>Компанії:</b> [Тікери: #NVDA, #GOOG, #SPY тощо]
             📊 <b>Сентимент:</b> [🟢 Позитивний / 🔴 Негативний / 🟡 Нейтральний]
             🔥 <b>Важливість:</b> [1-10]/10
 
             🧠 <b>Аналіз:</b>
-            [Як це вплине на акції. Інсайдерська покупка — це часто бичачий сигнал, продаж — залежить від обсягу.]
+            [Як це вплине на ціну. Коротко і по суті.]
 
             📈 <b>Опціонний кут (IV & Strategy):</b>
             [Вплив на IV. Чи варто продавати премію (Iron Condor, Credit Spreads) чи купувати волатильність?]
@@ -109,8 +106,8 @@ async function run() {
 
             while (attempt < maxAttempts) {
                 try {
-                    // Використовуємо стабільну модель із лімітом 1500 запитів на день
-                    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                    // Використовуємо 2.0-flash (актуальна модель з високими лімітами)
+                    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
                     const result = await model.generateContent(prompt);
                     responseText = result.response.text().trim();
                     break;
@@ -120,7 +117,6 @@ async function run() {
                     if (attempt >= maxAttempts) {
                         responseText = "ERROR";
                     } else {
-                        // Збільшено паузу до 60 секунд для надійного обходу ліміту 429
                         console.log(`[API Cooldown] Зачекаємо 60 секунд перед наступною спробою...`);
                         await new Promise(res => setTimeout(res, 60000));
                     }
@@ -128,7 +124,7 @@ async function run() {
             }
 
             if (responseText.startsWith("SKIP")) {
-                console.log(`[AI SKIP] Новина визнана неважливою: ${item.title}`);
+                console.log(`[AI SKIP] Новина не про портфель або неважлива: ${item.title}`);
                 continue;
             }
             
@@ -156,8 +152,8 @@ async function run() {
                 console.error(`[TG ERROR] Помилка відправки: ${await tgResponse.text()}`);
             }
             
-            // Збільшено паузу до 10 секунд між успішними обробками
-            await new Promise(res => setTimeout(res, 10000));
+            // Невелика пауза після відправки, щоб Telegram не заблокував за спам
+            await new Promise(res => setTimeout(res, 2000));
         }
         
         console.log("----------\nРоботу завершено успішно!");
