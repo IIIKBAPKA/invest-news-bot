@@ -20,8 +20,9 @@ const TARGET_TICKERS = [
 
 const tickerQuery = TARGET_TICKERS.join("+OR+");
 
+// Спрощений запит до Google News (без обмежень по сайтах, щоб не ламався пошук) та SEC
 const FEEDS = [
-    `https://news.google.com/rss/search?q=(${tickerQuery})+AND+(site:investing.com+OR+site:marketwatch.com+OR+site:benzinga.com+OR+site:barrons.com+OR+site:thefly.com)+when:1d&hl=en-US&gl=US`,
+    `https://news.google.com/rss/search?q=(${tickerQuery})+when:1d&hl=en-US&gl=US`,
     'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' 
 ];
 
@@ -42,7 +43,7 @@ async function run() {
             }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (24 * 60 * 60 * 1000);    
+        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);    
         
         const recentItems = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate).getTime();
@@ -108,7 +109,8 @@ async function run() {
 
             while (attempt < maxAttempts) {
                 try {
-                    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+                    // Використовуємо стабільну модель із лімітом 1500 запитів на день
+                    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
                     const result = await model.generateContent(prompt);
                     responseText = result.response.text().trim();
                     break;
@@ -118,9 +120,9 @@ async function run() {
                     if (attempt >= maxAttempts) {
                         responseText = "ERROR";
                     } else {
-                        // ЗБІЛЬШЕНО ПАУЗУ ДО 35 СЕКУНД для обходу ліміту 429
-                        console.log(`Зачекаємо 35 секунд перед наступною спробою...`);
-                        await new Promise(res => setTimeout(res, 35000));
+                        // Збільшено паузу до 60 секунд для надійного обходу ліміту 429
+                        console.log(`[API Cooldown] Зачекаємо 60 секунд перед наступною спробою...`);
+                        await new Promise(res => setTimeout(res, 60000));
                     }
                 }
             }
@@ -154,8 +156,8 @@ async function run() {
                 console.error(`[TG ERROR] Помилка відправки: ${await tgResponse.text()}`);
             }
             
-            // Збільшено паузу до 6 секунд між успішними обробками, щоб не дратувати API
-            await new Promise(res => setTimeout(res, 6000));
+            // Збільшено паузу до 10 секунд між успішними обробками
+            await new Promise(res => setTimeout(res, 10000));
         }
         
         console.log("----------\nРоботу завершено успішно!");
