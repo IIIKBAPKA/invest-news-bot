@@ -2,8 +2,8 @@ name: Invest News Bot
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Запуск кожні 30 хвилин
-  workflow_dispatch: # Дозволяє запустити скрипт вручну кнопкою
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
