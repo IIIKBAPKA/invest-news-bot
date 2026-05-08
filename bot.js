@@ -1,7 +1,6 @@
 const Parser = require('rss-parser');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Налаштування парсера з User-Agent (обов'язково для SEC)
 const parser = new Parser({
     headers: {
         'User-Agent': 'InvestBot/1.0 (your-email@example.com)', // ВПИШИ СВОЮ ПОШТУ ТУТ
@@ -13,28 +12,27 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// МАСТЕР-СПИСОК ТІКЕРІВ
 const TARGET_TICKERS = [
     "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
     "O", "CVX", "XOM", "ADBE", "AMZN", "1VOW3", "KO", "MSFT", 
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
-// Динамічно формуємо запит для Google News
 const tickerQuery = TARGET_TICKERS.join("+OR+");
 
-// Джерела новин (тільки топові фінансові/трейдерські ресурси + SEC)
 const FEEDS = [
     `https://news.google.com/rss/search?q=(${tickerQuery})+AND+(site:investing.com+OR+site:marketwatch.com+OR+site:benzinga.com+OR+site:barrons.com+OR+site:thefly.com)+when:1d&hl=en-US&gl=US`,
     'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' 
 ];
+
+// Створюємо регулярний вираз для пошуку ТОЧНИХ слів (щоб уникнути багу з літерою O)
+const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')}|MARKET)\\b`, 'i');
 
 async function run() {
     try {
         console.log("Запуск перевірки новин та SEC документів...");
         let allItems = [];
 
-        // Збираємо новини з усіх джерел
         for (const url of FEEDS) {
             try {
                 const feed = await parser.parseURL(url);
@@ -46,21 +44,20 @@ async function run() {
 
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
         
-        // Фільтрація
         const recentItems = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate).getTime();
             const titleUpper = item.title.toUpperCase();
-            const contentUpper = (item.title + (item.contentSnippet || "")).toUpperCase();
+            const content = item.title + " " + (item.contentSnippet || "");
             
-            // Фільтруємо технічний спам від банків (структурні ноти 424B2)
+            // Фільтруємо технічний спам від банків
             if (titleUpper.includes("424B2")) return false;
 
-            // Перевіряємо, чи є в тексті хоча б один тікер з нашого масиву або слово MARKET
-            const isTarget = TARGET_TICKERS.some(ticker => contentUpper.includes(ticker)) || contentUpper.includes("MARKET");
+            // МАГІЯ REGEX: Шукаємо тільки окремі слова, а не частини слів
+            const isTarget = targetRegex.test(content);
             
-            // Логування пропущених через фільтр тікерів
             if (pubDate > thirtyFiveMinsAgo && !isTarget) {
-                console.log(`[Фільтр тікерів] Пропущено (немає цільових компаній): ${item.title}`);
+                // Вимкнув логування пропущених, щоб не спамило тисячами рядків від SEC
+                // console.log(`[Фільтр тікерів] Пропущено: ${item.title}`);
             }
             
             return pubDate > thirtyFiveMinsAgo && isTarget;
@@ -71,11 +68,9 @@ async function run() {
             process.exit(0);
         }
 
-        // Видаляємо дублікати за заголовком
         const uniqueItems = Array.from(new Map(recentItems.map(item => [item.title, item])).values());
         console.log(`Знайдено унікальних подій: ${uniqueItems.length}`);
         
-        // Беремо перші 10 для обробки
         const itemsToProcess = uniqueItems.slice(0, 10); 
 
         for (const item of itemsToProcess) {
@@ -111,7 +106,6 @@ async function run() {
             let attempt = 0;
             const maxAttempts = 3;
 
-            // Блок запиту до Gemini з повторними спробами
             while (attempt < maxAttempts) {
                 try {
                     const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
@@ -120,16 +114,17 @@ async function run() {
                     break;
                 } catch (err) {
                     attempt++;
-                    console.warn(`[Спроба ${attempt}] Помилка Gemini для "${item.title}": ${err.message}`);
+                    console.warn(`[Спроба ${attempt}] Помилка Gemini: ${err.message}`);
                     if (attempt >= maxAttempts) {
                         responseText = "ERROR";
                     } else {
-                        await new Promise(res => setTimeout(res, 10000));
+                        // ЗБІЛЬШЕНО ПАУЗУ ДО 35 СЕКУНД для обходу ліміту 429
+                        console.log(`Зачекаємо 35 секунд перед наступною спробою...`);
+                        await new Promise(res => setTimeout(res, 35000));
                     }
                 }
             }
 
-            // Обробка відповідей SKIP та ERROR
             if (responseText.startsWith("SKIP")) {
                 console.log(`[AI SKIP] Новина визнана неважливою: ${item.title}`);
                 continue;
@@ -140,10 +135,8 @@ async function run() {
                 continue;
             }
 
-            // Формування фінального повідомлення
             const message = `🔔 <b>Нова подія на ринку</b>\n📰 <a href="${item.link}">${item.title}</a>\n\n${responseText}`;
 
-            // Відправка в Telegram
             const tgResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -155,15 +148,14 @@ async function run() {
                 })
             });
             
-            // Логування результату відправки
             if (tgResponse.ok) {
                 console.log(`[SUCCESS] Надіслано в Telegram: ${item.title}`);
             } else {
                 console.error(`[TG ERROR] Помилка відправки: ${await tgResponse.text()}`);
             }
             
-            // Затримка між відправками, щоб не зловити ліміт Telegram
-            await new Promise(res => setTimeout(res, 3000));
+            // Збільшено паузу до 6 секунд між успішними обробками, щоб не дратувати API
+            await new Promise(res => setTimeout(res, 6000));
         }
         
         console.log("----------\nРоботу завершено успішно!");
