@@ -6,29 +6,39 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const RSS_URL = 'https://finance.yahoo.com/news/rssindex';
+// Використовуємо Google News для миттєвих оновлень. 
+// Тут налаштований пошук новин за тікерами або загалом по ринку акцій за останню добу (when:1d)
+const RSS_URL = 'https://news.google.com/rss/search?q=NVDA+OR+GOOG+OR+VST+OR+"stock+market"+when:1d&hl=en-US&gl=US';
 
 async function run() {
     try {
         console.log("Запуск перевірки новин...");
         const feed = await parser.parseURL(RSS_URL);
         
-        console.log(`Всього знайдено новин у стрічці: ${feed.items.length}`);
-        if (feed.items.length === 0) {
-            console.log("Стрічка порожня.");
+        console.log(`Всього знайдено новин: ${feed.items.length}`);
+        
+        // Повертаємо фільтр: беремо тільки ті новини, які вийшли за останні 35 хвилин
+        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
+        const recentItems = feed.items.filter(item => new Date(item.pubDate).getTime() > thirtyFiveMinsAgo);
+
+        if (recentItems.length === 0) {
+            console.log("Нових новин за останні 35 хвилин немає.");
             return;
         }
 
-        const itemsToProcess = feed.items.slice(0, 1); 
+        console.log(`Знайдено свіжих новин: ${recentItems.length}`);
+
+        // Щоб не заспамити канал, відправляємо максимум 3 найважливіші новини за один запуск
+        const itemsToProcess = recentItems.slice(0, 3); 
 
         for (const item of itemsToProcess) {
-            console.log(`Оброблюємо новину: ${item.title}`);
+            console.log(`Оброблюємо: ${item.title}`);
             const prompt = `Ти — професійний інвестиційний аналітик. Я надам тобі заголовок та опис новини.
             1. Зроби короткий підсумок (до 3-х тез).
             2. Оціни загальний вплив на ринок (Позитивний / Негативний / Нейтральний).
             3. Якщо згадуються конкретні компанії (особливо GOOG, NVDA, VST), виділи це.
             
-            ВАЖЛИВО: Відповідай українською мовою. Не використовуй форматування Markdown (жодних зірочок ** чи решіток). Пиши звичайним простим текстом.
+            ВАЖЛИВО: Відповідай українською мовою. Не використовуй форматування Markdown (жодних зірочок чи решіток). Пиши звичайним простим текстом.
             
             Новина: ${item.title} — ${item.contentSnippet || item.description}`;
 
@@ -36,7 +46,6 @@ async function run() {
             const result = await model.generateContent(prompt);
             const response = result.response.text();
 
-            // Змінили розмітку на надійний HTML
             const message = `📰 <b>${item.title}</b>\n\n${response}\n\n🔗 <a href="${item.link}">Джерело</a>`;
 
             const tgUrl = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
@@ -46,19 +55,20 @@ async function run() {
                 body: JSON.stringify({
                     chat_id: TELEGRAM_CHAT_ID,
                     text: message,
-                    parse_mode: 'HTML' // Змінили Markdown на HTML
+                    parse_mode: 'HTML'
                 })
             });
             
             if (tgResponse.ok) {
-                console.log("Успішно відправлено в Telegram!");
-            } else {
-                console.error("Помилка відправки в Telegram:", await tgResponse.text());
+                console.log("Успішно відправлено!");
             }
+            
+            // Робимо паузу 3 секунди між новинами, щоб Telegram не заблокував за швидкість
+            await new Promise(res => setTimeout(res, 3000));
         }
-        console.log("Роботу завершено успішно!");
+        console.log("Роботу завершено!");
     } catch (error) {
-        console.error("Виникла помилка під час виконання:", error);
+        console.error("Помилка:", error);
     }
 }
 
