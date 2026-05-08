@@ -62,7 +62,7 @@ async function run() {
             } catch (e) { console.error(`❌ Помилка [${ticker}]:`, e.message); }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000); 
+        const thirtyFiveMinsAgo = Date.now() - (12 * 60 * 60 * 1000); // Тимчасовий тест на 12 годин 
         
         const freshAndTargeted = allItems.filter(item => {
             return item.pubDate > thirtyFiveMinsAgo && hasTicker(item.title);
