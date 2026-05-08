@@ -42,7 +42,7 @@ async function run() {
             }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
+        const thirtyFiveMinsAgo = Date.now() - (24 * 60 * 60 * 1000);
         
         const recentItems = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate).getTime();
