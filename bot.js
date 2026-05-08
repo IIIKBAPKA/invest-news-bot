@@ -17,23 +17,29 @@ const TARGET_COMPANIES = {
 };
 
 const TARGET_TICKERS = Object.keys(TARGET_COMPANIES);
+const ALL_TARGET_NAMES = [...TARGET_TICKERS, ...Object.values(TARGET_COMPANIES).flat()];
 
-// Функція для перевірки схожості заголовків (Simple Fuzzy Match)
+const hasTicker = (text) => {
+    const upperText = text.toUpperCase();
+    return ALL_TARGET_NAMES.some(target => {
+        const regex = new RegExp(`\\b${target.toUpperCase()}\\b`, 'i');
+        return regex.test(upperText);
+    });
+};
+
 function isSimilar(s1, s2) {
     const words1 = new Set(s1.toLowerCase().split(/\s+/).filter(w => w.length > 3));
     const words2 = new Set(s2.toLowerCase().split(/\s+/).filter(w => w.length > 3));
     if (words1.size === 0 || words2.size === 0) return false;
-    
     let intersection = 0;
     words1.forEach(w => { if (words2.has(w)) intersection++; });
-    
     const overlap = intersection / Math.min(words1.size, words2.size);
-    return overlap > 0.7; // Якщо 70% ключових слів збігаються — це дублікат
+    return overlap > 0.7;
 }
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 5.1 Smart Dedup)...");
+        console.log("🚀 Запуск моніторингу (v5.2 Fix Prompt + Smart Dedup)...");
         let allItems = [];
         const today = new Date().toISOString().split('T')[0];
 
@@ -52,28 +58,25 @@ async function run() {
                     }));
                     allItems = allItems.concat(formattedItems);
                 }
-                await new Promise(r => setTimeout(r, 500)); 
+                await new Promise(r => setTimeout(r, 400)); 
             } catch (e) { console.error(`❌ Помилка [${ticker}]:`, e.message); }
         }
 
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000); 
         
-        // 1. Фільтр по часу
-        const freshItems = allItems.filter(item => item.pubDate > thirtyFiveMinsAgo);
+        const freshAndTargeted = allItems.filter(item => {
+            return item.pubDate > thirtyFiveMinsAgo && hasTicker(item.title);
+        });
 
-        // 2. Розумна дедуплікація
         const uniqueItems = [];
-        for (const item of freshItems) {
+        for (const item of freshAndTargeted) {
             const isDuplicate = uniqueItems.some(u => isSimilar(u.title, item.title));
-            if (!isDuplicate) {
-                uniqueItems.push(item);
-            }
+            if (!isDuplicate) uniqueItems.push(item);
         }
 
-        console.log(`📊 СТАТИСТИКА: Всього ${allItems.length} | Свіжих ${freshItems.length} | Унікальних ${uniqueItems.length}`);
+        console.log(`📊 СТАТИСТИКА: Всього ${allItems.length} | Цільових/Свіжих ${freshAndTargeted.length} | Унікальних ${uniqueItems.length}`);
 
         if (uniqueItems.length === 0) {
-            console.log("☕ Нових подій немає.");
             process.exit(0);
         }
 
@@ -86,28 +89,42 @@ async function run() {
                 if (res.ok) fullText = (await res.text()).slice(0, 8000);
             } catch (e) { console.log("⚠️ Тільки сніпет."); }
 
+            // Твій оригінальний промт без жодних змін
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
-            Якщо вона НЕ стосується компаній зі списку або не несе цінності — відповідай SKIP.
-            Список: ${TARGET_TICKERS.join(', ')}
+            Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} або новина якась дуже неважлива чи просто якийсь факт що щось виросло без конкретики — відповідай SKIP.
 
-            HTML-шаблон:
-            🎯 <b>Головне:</b> [Суть]
+            ВАЖЛИВО: Пиши ТІЛЬКИ чистий текст, але зі смайлами і тегами шаблону (головне щоб цей синтаксис telegram прийняв). 
+
+            КРОК 2: Сформуй звіт (HTML, без Markdown):
+            🎯 <b>Головне:</b> [Суть події без води]
+            
             🏢 <b>Компанії:</b> [#TICKER]
             📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
-            🧠 <b>Аналіз:</b> [Вплив]
-            📈 <b>Опціонний кут:</b> [Стратегії]
-            ⚔️ <b>Конкуренти:</b> [Тікери]
+            
+            🧠 <b>Аналіз:</b> [Вплив на ціну акції, логіка руху]
+            
+            📈 <b>Опціонний кут:</b> [IV та стратегії: Iron Condor, Spreads тощо. Пиши простою мовою, як для новачка]
+            
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів та короткий вплив на них]
 
             Текст: ${item.title} \n ${fullText}`;
 
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-8b" }); // Можна flash-lite для швидкості
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-8b" });
             try {
                 const result = await model.generateContent(prompt);
                 const response = result.response.text().trim();
 
                 if (!response.includes("SKIP")) {
-                    const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
+                    let safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u)\b)[^>]+>/gi, '');
+                    const tags = ['b', 'i', 'a', 'code', 's', 'u'];
+                    tags.forEach(tag => {
+                        const opened = (safeResponse.match(new RegExp(`<${tag}(\\s|>|/)`, 'g')) || []).length;
+                        const closed = (safeResponse.match(new RegExp(`</${tag}>`, 'g')) || []).length;
+                        if (opened > closed) safeResponse += `</${tag}>`.repeat(opened - closed);
+                    });
+
+                    const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${safeResponse}`;
                     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
