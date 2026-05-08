@@ -129,7 +129,18 @@ async function run() {
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
-                        const safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u)\b)[^>]+>/gi, '');
+                        // 1. Очищення від заборонених тегів
+                        let safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u)\b)[^>]+>/gi, '');
+
+                        // 2. ФІКС ДЛЯ TELEGRAM: Автоматичне закриття «забутих» тегів
+                        const tags = ['b', 'i', 'a', 'code', 's', 'u'];
+                        tags.forEach(tag => {
+                            const opened = (safeResponse.match(new RegExp(`<${tag}(\\s|>|/)`, 'g')) || []).length;
+                            const closed = (safeResponse.match(new RegExp(`</${tag}>`, 'g')) || []).length;
+                            if (opened > closed) {
+                                safeResponse += `</${tag}>`.repeat(opened - closed);
+                            }
+                        });
 
                         const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${safeResponse}`;
                         
@@ -145,7 +156,6 @@ async function run() {
                             signal: AbortSignal.timeout(10000)
                         });
 
-                        // ЗМІНА ТУТ: Додана перевірка статусу відправки
                         if (tgRes.ok) {
                             console.log("📨 Надіслано в Telegram успішно.");
                         } else {
@@ -164,7 +174,7 @@ async function run() {
                         await new Promise(r => setTimeout(r, waitTime));
                         
                         if (attempts === MAX_AI_ATTEMPTS) {
-                            console.log("⏭️ Сервер стабільно перевантажений. Відправляємо сирий сніпет новини як Fallback.");
+                            console.log("⏭️ Сервер стабільно перевантажений. Відправляємо Fallback.");
                             const fallbackMsg = `🔔 <b>Новина (Без аналізу ШІ):</b> <a href="${item.link}">${item.title}</a>\n\n<b>Опис:</b> ${item.contentSnippet || "Опис відсутній"}\n\n<i>⚠️ Аналіз недоступний: сервери ШІ перевантажені (503).</i>`;
                             
                             try {
@@ -175,9 +185,8 @@ async function run() {
                                     signal: AbortSignal.timeout(10000)
                                 });
                                 if (fbRes.ok) console.log("📨 Фолбек надіслано в Telegram.");
-                                else console.error("❌ Помилка відправки фолбеку.");
                             } catch (fallbackErr) {
-                                console.error("❌ Помилка відправки фолбеку:", fallbackErr.message);
+                                console.error("❌ Помилка відправки фолбеку.");
                             }
                             success = true; 
                         }
