@@ -5,7 +5,6 @@ const parser = new Parser({
     headers: {
         // Офіційна вимога SEC для ідентифікації бота
         'User-Agent': 'InvestAnalyticsBot/1.0 (anton012@gmail.com)',
-        'Host': 'www.sec.gov',
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
 });
