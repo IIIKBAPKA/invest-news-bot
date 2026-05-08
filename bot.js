@@ -19,8 +19,10 @@ const TARGET_TICKERS = [
 ];
 
 // Тепер джерела мають свої імена для красивих логів
+// Топові трейдерські джерела (максимум акценту на фондовий ринок) + SEC
 const FEEDS = [
-    { name: 'CNBC', url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664' }, 
+    { name: 'Benzinga', url: 'https://www.benzinga.com/feed' }, 
+    { name: 'Investing', url: 'https://www.investing.com/rss/news_25.rss' },
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
