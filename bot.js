@@ -6,8 +6,6 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Використовуємо Google News для миттєвих оновлень. 
-// Тут налаштований пошук новин за тікерами або загалом по ринку акцій за останню добу (when:1d)
 const RSS_URL = 'https://news.google.com/rss/search?q=NVDA+OR+GOOG+OR+VST+OR+"stock+market"+when:1d&hl=en-US&gl=US';
 
 async function run() {
@@ -17,18 +15,15 @@ async function run() {
         
         console.log(`Всього знайдено новин: ${feed.items.length}`);
         
-        // Повертаємо фільтр: беремо тільки ті новини, які вийшли за останні 35 хвилин
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
         const recentItems = feed.items.filter(item => new Date(item.pubDate).getTime() > thirtyFiveMinsAgo);
 
         if (recentItems.length === 0) {
             console.log("Нових новин за останні 35 хвилин немає.");
-            process.exit(0); // Миттєве завершення, якщо новин немає
+            process.exit(0);
         }
 
         console.log(`Знайдено свіжих новин: ${recentItems.length}`);
-
-        // Щоб не заспамити канал, відправляємо максимум 3 найважливіші новини за один запуск
         const itemsToProcess = recentItems.slice(0, 3); 
 
         for (const item of itemsToProcess) {
@@ -58,11 +53,30 @@ async function run() {
 
             Новина для аналізу: ${item.title} — ${item.contentSnippet || item.description}`;
 
-            const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-            const result = await model.generateContent(prompt);
-            const response = result.response.text();
+            let responseText = "";
+            let attempt = 0;
+            const maxAttempts = 3;
 
-            const message = `📰 <b>${item.title}</b>\n\n${response}\n\n🔗 <a href="${item.link}">Джерело</a>`;
+            // Блок Retry для стабільності API
+            while (attempt < maxAttempts) {
+                try {
+                    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+                    const result = await model.generateContent(prompt);
+                    responseText = result.response.text();
+                    break; // Успіх, виходимо з циклу спроб
+                } catch (err) {
+                    attempt++;
+                    console.warn(`Спроба ${attempt} запиту до ШІ невдала: ${err.message}`);
+                    if (attempt >= maxAttempts) {
+                        responseText = "⚠️ *Gemini API тимчасово перевантажений і не зміг проаналізувати новину. Прочитайте оригінал за посиланням нижче.*";
+                    } else {
+                        console.log("Чекаємо 10 секунд перед наступною спробою...");
+                        await new Promise(res => setTimeout(res, 10000));
+                    }
+                }
+            }
+
+            const message = `📰 <b>${item.title}</b>\n\n${responseText}\n\n🔗 <a href="${item.link}">Джерело</a>`;
 
             const tgUrl = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
             const tgResponse = await fetch(tgUrl, {
@@ -81,15 +95,14 @@ async function run() {
                 console.error("Помилка Telegram:", await tgResponse.text());
             }
             
-            // Робимо паузу 3 секунди між новинами, щоб Telegram не заблокував за швидкість
             await new Promise(res => setTimeout(res, 3000));
         }
         
         console.log("Роботу завершено!");
-        process.exit(0); // Примусове завершення при успіху
+        process.exit(0);
     } catch (error) {
         console.error("Помилка:", error);
-        process.exit(1); // Примусове завершення при помилці
+        process.exit(1);
     }
 }
 
