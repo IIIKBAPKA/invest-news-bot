@@ -3,10 +3,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        // SEC вимагає пошту в User-Agent, інакше дає 403
+        // SEC вимагає пошту, але без стиснення (gzip), бо rss-parser його не перетравлює
         'User-Agent': 'Anton Vereta (anton012@gmail.com)', 
         'Accept': 'application/atom+xml, application/xml, text/xml',
-        'Accept-Encoding': 'gzip, deflate'
     },
 });
 
@@ -33,7 +32,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Gemini 3.1 Flash Lite + Anti-Freeze)...");
+        console.log("🚀 Запуск моніторингу (Clean XML Mode)...");
         let allItems = [];
 
         for (const feedSource of FEEDS) {
@@ -65,7 +64,7 @@ async function run() {
             let fullText = item.contentSnippet || item.description || "";
             if (item.sourceName === 'GoogleNews') {
                 try {
-                    const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(10000) });
+                    const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
                     if (res.ok) {
                         const content = await res.text();
                         fullText = content.slice(0, 8000);
@@ -80,13 +79,13 @@ async function run() {
             Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або ти думаєш що вона особливо неважлива для ринку — відповідай SKIP.
 
             КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном (без Markdown):
-            🎯 <b>Головне:</b> [Суть події. Тут потрібно щоб ти описав про що взагалі ця новина, без води, але щоб була чітко зрозуміла суть]
+            🎯 <b>Головне:</b> [Суть події. Опиши про що новина без води, але щоб була чітко зрозуміла суть]
             🏢 <b>Компанії:</b> [#TICKER]
-            📊 <b>Сентимент:</b> [🟢/🔴/🟡 - як новина вплине на данну компанію якої стосується]
+            📊 <b>Сентимент:</b> [🟢/🔴/🟡 - вплив на компанію]
             🔥 <b>Важливість:</b> [1-10]/10
-            🧠 <b>Аналіз:</b> [Вплив на ціну акції. Тут так само без води потрібен аналіз новини від тебе, щоб було чітко зрозуміло що до чого]
+            🧠 <b>Аналіз:</b> [Вплив на ціну акції, аналіз новини]
             📈 <b>Опціонний кут:</b> [IV та стратегія: Iron Condor, Spreads тощо]
-            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і як вплине на них коротко]
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і вплив на них]
 
             Текст: ${item.title} \n ${fullText}`;
 
@@ -97,10 +96,9 @@ async function run() {
                 try {
                     const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
                     
-                    // Додаємо примусовий таймаут на виклик Gemini
                     const result = await Promise.race([
                         model.generateContent(prompt),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 30000))
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 40000))
                     ]);
 
                     const response = result.response.text().trim();
@@ -130,7 +128,7 @@ async function run() {
                 }
             }
         }
-        console.log("✅ Всі новини опрацьовано.");
+        console.log("✅ Готово.");
         process.exit(0);
     } catch (error) {
         console.error("💥 Критична помилка:", error);
