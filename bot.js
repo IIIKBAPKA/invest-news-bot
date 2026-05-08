@@ -71,7 +71,7 @@ async function run() {
             }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000); 
+        const thirtyFiveMinsAgo = Date.now() - (12 * 60 * 60 * 1000); // Тимчасовий тест на 12 годин 
         let passedBySource = {};
 
         // 2. ФІЛЬТРАЦІЯ (Тікери вже відфільтровані самим Finnhub, перевіряємо тільки час)
