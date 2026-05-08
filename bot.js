@@ -1,8 +1,13 @@
 const Parser = require('rss-parser');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Базовий парсер без специфічних заблокованих хедерів
-const parser = new Parser();
+// Повертаємо стабільну ініціалізацію
+const parser = new Parser({
+    headers: {
+        'User-Agent': 'InvestBot/1.0 (anton012@gmail.com)',
+        'Accept': 'application/atom+xml, application/xml, text/xml'
+    },
+});
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
@@ -16,19 +21,8 @@ const TARGET_TICKERS = [
 
 const tickerQuery = TARGET_TICKERS.join(" OR ");
 const FEEDS = [
-    { 
-        name: 'GoogleNews', 
-        url: `https://news.google.com/rss/search?q=${encodeURIComponent(tickerQuery)}+when:1d&hl=en-US&gl=US`,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-    },
-    { 
-        name: 'SEC', 
-        url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom',
-        headers: { 
-            'User-Agent': 'InvestBot/1.0 (anton012@gmail.com)',
-            'Host': 'www.sec.gov'
-        }
-    } 
+    { name: 'GoogleNews', url: `https://news.google.com/rss/search?q=${encodeURIComponent(tickerQuery)}+when:1d&hl=en-US&gl=US` },
+    { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
 const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
@@ -36,23 +30,18 @@ const hasTicker = (text) => targetRegex.test(text);
 
 async function run() {
     try {
-        console.log("Starting monitor (v3.8 Final Clean)...");
+        console.log("Starting monitor (v3.9 Stable Rollback)...");
         let allItems = [];
-        let sourceStats = {};
 
         for (const feedSource of FEEDS) {
             try {
-                await new Promise(r => setTimeout(r, 2000));
-                // Передаємо хедери індивідуально для кожного джерела
-                const feed = await parser.parseURL({
-                    url: feedSource.url,
-                    headers: feedSource.headers
-                });
+                // Просто передаємо URL як рядок — це найбільш сумісний спосіб
+                const feed = await parser.parseURL(feedSource.url);
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
                 allItems = allItems.concat(items);
-                sourceStats[feedSource.name] = items.length;
+                console.log(`- ${feedSource.name}: fetched ${items.length} items`);
             } catch (e) {
-                console.error(`Source Error [${feedSource.name}]:`, e.message);
+                console.error(`- ${feedSource.name} Error:`, e.message);
             }
         }
 
@@ -63,11 +52,7 @@ async function run() {
         });
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
-
-        console.log(`\nSTATS:`);
-        console.log(`- Total found: ${allItems.length}`);
-        Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} fetched`));
-        console.log(`- Filtered: ${uniqueItems.length}\n`);
+        console.log(`\nFiltered: ${uniqueItems.length} unique items for AI\n`);
 
         if (uniqueItems.length === 0) {
             console.log("No new events. Exit.");
@@ -75,7 +60,7 @@ async function run() {
         }
 
         for (const item of uniqueItems.slice(0, 10)) {
-            console.log(`----------\nProcessing [${item.sourceName}]: ${item.title}`);
+            console.log(`Processing: ${item.title}`);
             
             let fullText = item.contentSnippet || item.description || "";
             if (item.sourceName === 'GoogleNews') {
@@ -84,22 +69,22 @@ async function run() {
                     if (res.ok) {
                         const content = await res.text();
                         fullText = content.slice(0, 4000); 
-                        console.log("Full text loaded.");
                     }
-                } catch (e) { console.log("Snippet only."); }
+                } catch (e) { console.log("Snippet only used."); }
             }
 
-            await new Promise(r => setTimeout(r, 5000));
+            // Пауза між запитами до ШІ
+            await new Promise(r => setTimeout(r, 6000));
 
-            const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
-            Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або вона неважлива — відповідай SKIP. Дотримуйся шаблону.
+            const prompt = `Ти — Senior інвестиційний аналітик. Проаналізуй новину. 
+            Якщо вона НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} — відповідай SKIP. 
+            Використовуй HTML формат.
 
-            КРОК 2: Сформуй звіт (HTML):
             🎯 <b>Головне:</b> [Суть без води]
             🏢 <b>Компанії:</b> [#TICKER]
             📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
-            🧠 <b>Аналіз:</b> [Вплив на ціну акції]
+            🧠 <b>Аналіз:</b> [Вплив на ціну]
             📈 <b>Опціонний кут:</b> [IV та стратегія проста мова]
             ⚔️ <b>Конкуренти:</b> [Тікери конкурентів]
 
@@ -116,7 +101,6 @@ async function run() {
                         new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 40000))
                     ]);
 
-                    if (!result || !result.response) throw new Error("EMPTY_RESPONSE");
                     const response = result.response.text().trim();
 
                     if (!response.includes("SKIP")) {
@@ -131,12 +115,14 @@ async function run() {
                             }),
                             signal: AbortSignal.timeout(8000)
                         });
-                        console.log("Sent.");
-                    } else { console.log("AI SKIP."); }
+                        console.log("Sent to Telegram.");
+                    } else {
+                        console.log("AI skipped this item.");
+                    }
                     success = true;
                 } catch (err) {
                     attempts++;
-                    console.error(`AI Error (Attempt ${attempts}): ${err.message}`);
+                    console.error(`AI Attempt ${attempts} failed: ${err.message}`);
                     if (attempts < 3) await new Promise(r => setTimeout(r, 10000));
                     else success = true;
                 }
@@ -144,7 +130,7 @@ async function run() {
         }
         process.exit(0);
     } catch (error) {
-        console.error("Critical Error:", error.message);
+        console.error("Critical:", error.message);
         process.exit(1);
     }
 }
