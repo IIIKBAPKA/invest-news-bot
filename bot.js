@@ -18,37 +18,40 @@ const TARGET_TICKERS = [
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
-// CNBC Finance (якісні новини без жорсткого пейволу) + SEC
+// Тепер джерела мають свої імена для красивих логів
 const FEEDS = [
-    'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664', 
-    'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' 
+    { name: 'CNBC', url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664' }, 
+    { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
 const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
 
 async function run() {
     try {
-        console.log("Запуск перевірки новин (CNBC) та SEC документів...");
+        console.log("Запуск перевірки новин та SEC документів...");
         let allItems = [];
 
-        for (const url of FEEDS) {
+        for (const feedSource of FEEDS) {
             try {
-                const feed = await parser.parseURL(url);
-                allItems = allItems.concat(feed.items);
+                const feed = await parser.parseURL(feedSource.url);
+                // "Клеїмо" ім'я джерела до кожної новини
+                const itemsWithSource = feed.items.map(item => {
+                    item.sourceName = feedSource.name;
+                    return item;
+                });
+                allItems = allItems.concat(itemsWithSource);
             } catch (e) {
-                console.error(`Помилка парсингу джерела ${url}:`, e.message);
+                console.error(`Помилка парсингу джерела [${feedSource.name}]:`, e.message);
             }
         }
 
-        // Зміни на (24 * 60 * 60 * 1000) для тесту за добу, або залиш 35 хвилин для крона
+        // 35 хвилин для крона
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);    
         
-        // Лічильники для "Рентгену"
         let skippedByTime = 0;
         let skippedByTicker = 0;
 
         const recentItems = allItems.filter(item => {
-            // Перевіряємо, чи є дата. Якщо немає, ставимо 0, щоб новина відкинулась як стара
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
             const titleUpper = (item.title || "").toUpperCase();
             const content = (item.title || "") + " " + (item.contentSnippet || "");
@@ -58,23 +61,21 @@ async function run() {
             const isFresh = pubDate > thirtyFiveMinsAgo;
             const isTarget = targetRegex.test(content);
             
-            // Якщо новина стара — плюсуємо лічильник часу і відкидаємо
             if (!isFresh) {
                 skippedByTime++;
                 return false;
             }
             
-            // Якщо свіжа, але не про наш тікер — логуємо і відкидаємо
             if (!isTarget) {
                 skippedByTicker++;
-                console.log(`[Локальний Фільтр] Пропущено (немає цільових тікерів): ${item.title}`);
+                // Тепер лог показує, з якого сайту прилетів спам
+                console.log(`[Фільтр] Пропущено [${item.sourceName}]: ${item.title}`);
                 return false;
             }
 
             return true;
         });
 
-        // Виводимо красиву статистику
         console.log(`\n📊 Статистика парсингу:`);
         console.log(`- Всього завантажено з джерел: ${allItems.length}`);
         console.log(`- Відкинуто (старіші за наш час): ${skippedByTime}`);
@@ -92,22 +93,23 @@ async function run() {
         const itemsToProcess = uniqueItems.slice(0, 5); 
 
         for (const item of itemsToProcess) {
-            console.log(`----------\nОброблюємо: ${item.title}`);
+            console.log(`----------\nОброблюємо [${item.sourceName}]: ${item.title}`);
             
-            // МАГІЯ: Бот "читає" повну статтю за посиланням
             let fullArticleText = item.contentSnippet || item.description || "";
-            console.log(`Завантажуємо повний текст статті...`);
-            try {
-                // r.jina.ai автоматично витягує чистий текст із будь-якого URL
-                const pageResponse = await fetch(`https://r.jina.ai/${item.link}`);
-                if (pageResponse.ok) {
-                    const text = await pageResponse.text();
-                    // Відрізаємо перші 8000 символів, щоб не перевантажити ліміти токенів ШІ
-                    fullArticleText = text.slice(0, 8000); 
-                    console.log(`Текст успішно завантажено!`);
+            
+            // Завантажуємо повний текст ТІЛЬКИ для новин CNBC, документи SEC ШІ проаналізує по заголовку
+            if (item.sourceName === 'CNBC') {
+                console.log(`Завантажуємо повний текст статті CNBC...`);
+                try {
+                    const pageResponse = await fetch(`https://r.jina.ai/${item.link}`);
+                    if (pageResponse.ok) {
+                        const text = await pageResponse.text();
+                        fullArticleText = text.slice(0, 8000); 
+                        console.log(`Текст успішно завантажено!`);
+                    }
+                } catch (err) {
+                    console.log(`[Попередження] Не вдалося завантажити сайт, аналізуємо короткий сніпет.`);
                 }
-            } catch (err) {
-                console.log(`[Попередження] Не вдалося завантажити сайт, аналізуємо короткий сніпет.`);
             }
 
             await new Promise(res => setTimeout(res, 4000));
@@ -127,7 +129,7 @@ async function run() {
             🔥 <b>Важливість:</b> [1-10]/10
 
             🧠 <b>Аналіз:</b>
-            [Детальний аналіз на основі прочитаної статті. Як це вплине на ціну акції. Коротко і по суті.]
+            [Детальний аналіз на основі статті. Як це вплине на ціну акції. Коротко і по суті.]
 
             📈 <b>Опціонний кут (IV & Strategy):</b>
             [Вплив на IV. Чи варто продавати премію (Iron Condor, Credit Spreads) чи купувати волатильність?]
