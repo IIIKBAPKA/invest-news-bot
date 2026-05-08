@@ -18,7 +18,7 @@ async function run() {
             console.log(`Найсвіжіша новина в RSS датована: ${feed.items[0].pubDate}`);
         }
 
-        // Для тесту збільшуємо вікно пошуку до 12 годин
+        // Вікно пошуку — 12 годин
         const timeWindow = Date.now() - (12 * 60 * 60 * 1000);
         const recentItems = feed.items.filter(item => new Date(item.pubDate).getTime() > timeWindow);
 
@@ -29,7 +29,7 @@ async function run() {
 
         console.log(`Пройшли фільтр часу: ${recentItems.length} новин.`);
 
-        // Беремо ТІЛЬКИ ОДНУ новину для тесту, щоб не заспамити канал
+        // Беремо ТІЛЬКИ ОДНУ новину для тесту
         const itemsToProcess = recentItems.slice(0, 1); 
 
         for (const item of itemsToProcess) {
