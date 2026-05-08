@@ -12,24 +12,23 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Тільки компанії, нічого зайвого
 const TARGET_TICKERS = [
     "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
     "CVX", "XOM", "ADBE", "AMZN", "1VOW3", "KO", "MSFT", 
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
+// CNBC Finance (якісні новини без жорсткого пейволу) + SEC
 const FEEDS = [
-    'https://feeds.marketwatch.com/marketwatch/topstories',
+    'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664', 
     'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' 
 ];
 
-// Суворий фільтр: шукаємо тільки точні співпадіння тікерів
 const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
 
 async function run() {
     try {
-        console.log("Запуск перевірки новин (MarketWatch) та SEC документів...");
+        console.log("Запуск перевірки новин (CNBC) та SEC документів...");
         let allItems = [];
 
         for (const url of FEEDS) {
@@ -50,9 +49,7 @@ async function run() {
             
             if (titleUpper.includes("424B2")) return false;
 
-            // Фільтр-снайпер: тільки наші тікери
             const isTarget = targetRegex.test(content);
-            
             return pubDate > thirtyFiveMinsAgo && isTarget;
         });
 
@@ -62,14 +59,29 @@ async function run() {
         }
 
         const uniqueItems = Array.from(new Map(recentItems.map(item => [item.title, item])).values());
-        console.log(`Локальний фільтр пройдено. Знайдено подій для ШІ: ${uniqueItems.length}`);
+        console.log(`Локальний фільтр пройдено. Знайдено подій: ${uniqueItems.length}.`);
         
-        // Беремо максимум 5 новин, щоб не перевантажувати логіку
         const itemsToProcess = uniqueItems.slice(0, 5); 
 
         for (const item of itemsToProcess) {
             console.log(`----------\nОброблюємо: ${item.title}`);
             
+            // МАГІЯ: Бот "читає" повну статтю за посиланням
+            let fullArticleText = item.contentSnippet || item.description || "";
+            console.log(`Завантажуємо повний текст статті...`);
+            try {
+                // r.jina.ai автоматично витягує чистий текст із будь-якого URL
+                const pageResponse = await fetch(`https://r.jina.ai/${item.link}`);
+                if (pageResponse.ok) {
+                    const text = await pageResponse.text();
+                    // Відрізаємо перші 8000 символів, щоб не перевантажити ліміти токенів ШІ
+                    fullArticleText = text.slice(0, 8000); 
+                    console.log(`Текст успішно завантажено!`);
+                }
+            } catch (err) {
+                console.log(`[Попередження] Не вдалося завантажити сайт, аналізуємо короткий сніпет.`);
+            }
+
             await new Promise(res => setTimeout(res, 4000));
 
             const prompt = `Ти — Senior інвестиційний аналітик та експерт з торгівлі опціонами. 
@@ -80,14 +92,14 @@ async function run() {
 
             КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном. Не використовуй Markdown (** чи *). Заповни дані в дужках [...]:
 
-            🎯 <b>Головне:</b> [Суть події. Якщо це SEC — вкажи тип форми та хто здійснив дію]
+            🎯 <b>Головне:</b> [Суть події на основі повного тексту. Якщо це SEC — вкажи тип форми та хто здійснив дію]
 
             🏢 <b>Компанії:</b> [Тікери з хештегом]
             📊 <b>Сентимент:</b> [🟢 Позитивний / 🔴 Негативний / 🟡 Нейтральний]
             🔥 <b>Важливість:</b> [1-10]/10
 
             🧠 <b>Аналіз:</b>
-            [Як це вплине на ціну акції. Коротко і по суті.]
+            [Детальний аналіз на основі прочитаної статті. Як це вплине на ціну акції. Коротко і по суті.]
 
             📈 <b>Опціонний кут (IV & Strategy):</b>
             [Вплив на IV. Чи варто продавати премію (Iron Condor, Credit Spreads) чи купувати волатильність?]
@@ -96,7 +108,7 @@ async function run() {
 
             ВАЖЛИВО: Відповідай українською мовою.
             Джерело: ${item.link}
-            Подія: ${item.title} — ${item.contentSnippet || item.description}`;
+            Повний текст новини/документа: ${fullArticleText}`;
 
             let responseText = "";
             let attempt = 0;
@@ -114,7 +126,6 @@ async function run() {
                     if (attempt >= maxAttempts) {
                         responseText = "ERROR";
                     } else {
-                        // Зменшили паузу до 20 секунд, щоб GitHub не вбивав процес через тайм-аут
                         console.log(`[API Cooldown] Зачекаємо 20 секунд перед наступною спробою...`);
                         await new Promise(res => setTimeout(res, 20000));
                     }
