@@ -3,7 +3,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', 
+        // ОФІЦІЙНА ВИМОГА SEC: Назва + Email. Це прибере 403 помилку.
+        'User-Agent': 'InvestAnalyticsBot/1.0 (anton012@gmail.com)', 
+        'Host': 'www.sec.gov',
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
 });
@@ -32,12 +34,14 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.5 Debug Mode)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.7 Gemini 2.0 Flash Lite)...");
         let allItems = [];
         let sourceStats = {};
 
         for (const feedSource of FEEDS) {
             try {
+                // Невелика затримка для SEC
+                await new Promise(r => setTimeout(r, 2000));
                 const feed = await parser.parseURL(feedSource.url);
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
                 allItems = allItems.concat(items);
@@ -48,23 +52,14 @@ async function run() {
         }
 
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
-        let passedBySource = { GoogleNews: 0, SEC: 0 };
-
         const filtered = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
-            const isFresh = pubDate > thirtyFiveMinsAgo;
-            const isTarget = hasTicker(item.title + " " + (item.contentSnippet || ""));
-            
-            if (isFresh && isTarget) {
-                passedBySource[item.sourceName]++;
-                return true;
-            }
-            return false;
+            return pubDate > thirtyFiveMinsAgo && hasTicker(item.title + " " + (item.contentSnippet || ""));
         });
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
-        console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
+        console.log(`\n📊 СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
         console.log(`- Пройшли фільтр: ${uniqueItems.length}\n`);
@@ -80,7 +75,6 @@ async function run() {
             let fullText = item.contentSnippet || item.description || "";
             if (item.sourceName === 'GoogleNews') {
                 try {
-                    // Таймаут на запит тексту 10 сек
                     const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(10000) });
                     if (res.ok) {
                         const content = await res.text();
@@ -90,7 +84,6 @@ async function run() {
                 } catch (e) { console.log("⚠️ Тільки сніпет."); }
             }
 
-            // Фіксована пауза 5 сек між новинами
             await new Promise(r => setTimeout(r, 5000));
 
             const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
@@ -102,7 +95,7 @@ async function run() {
             📊 <b>Сентимент:</b> [🟢/🔴/🟡 - вплив на компанію]
             🔥 <b>Важливість:</b> [1-10]/10
             🧠 <b>Аналіз:</b> [Вплив на ціну акції, аналіз новини]
-            📈 <b>Опціонний кут:</b> [IV та стратегія: Iron Condor, Spreads тощо тут можеш не прям професійними словами, я поки вчусь і розумію що таке опціони, але якщо дуже специфічні терміни - можу плутатись]
+            📈 <b>Опціонний кут:</b> [IV та стратегія: Iron Condor, Spreads тощо проста мова]
             ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і вплив на них]
 
             Текст: ${item.title} \n ${fullText}`;
@@ -113,11 +106,12 @@ async function run() {
 
             while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
-                    const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
+                    // Встановлено Gemini 2.0 Flash Lite
+                    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
                     
                     const result = await Promise.race([
                         model.generateContent(prompt),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 35000))
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 40000))
                     ]);
 
                     if (!result || !result.response) throw new Error("EMPTY_RESPONSE");
@@ -143,25 +137,18 @@ async function run() {
                     success = true;
                 } catch (err) {
                     attempts++;
-                    // Виводимо конкретну помилку для дебагу
                     console.error(`❌ Помилка AI (Спроба ${attempts}): ${err.message}`);
 
                     if (attempts < MAX_AI_ATTEMPTS && (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT')) {
-                        // Фіксована пауза 12 сек при помилці
-                        console.log(`⚠️ Очікуємо 12 сек перед ретраєм...`);
+                        console.log(`⚠️ Чекаємо 12 сек...`);
                         await new Promise(r => setTimeout(r, 12000));
                     } else {
-                        success = true; // Вихід з циклу, якщо спроби вичерпано або помилка фатальна
+                        success = true; 
                     }
                 }
             }
         }
-        console.log("✅ Роботу завершено.");
+        console.log("✅ Роботу завершено успішно.");
         process.exit(0);
     } catch (error) {
-        console.error("💥 Критична помилка:", error);
-        process.exit(1);
-    }
-}
-
-run();
+        console.error("
