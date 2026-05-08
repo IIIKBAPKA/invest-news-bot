@@ -23,7 +23,7 @@ async function run() {
 
         if (recentItems.length === 0) {
             console.log("Нових новин за останні 35 хвилин немає.");
-            return;
+            process.exit(0); // Миттєве завершення, якщо новин немає
         }
 
         console.log(`Знайдено свіжих новин: ${recentItems.length}`);
@@ -77,21 +77,19 @@ async function run() {
             
             if (tgResponse.ok) {
                 console.log("Успішно відправлено!");
+            } else {
+                console.error("Помилка Telegram:", await tgResponse.text());
             }
             
             // Робимо паузу 3 секунди між новинами, щоб Telegram не заблокував за швидкість
             await new Promise(res => setTimeout(res, 3000));
         }
-        // ... (попередній код)
+        
         console.log("Роботу завершено!");
-        process.exit(0); // <--- Додаємо примусове завершення при успіху
+        process.exit(0); // Примусове завершення при успіху
     } catch (error) {
         console.error("Помилка:", error);
-        process.exit(1); // <--- Додаємо примусове завершення при помилці
-    }
-}
-
-run();
+        process.exit(1); // Примусове завершення при помилці
     }
 }
 
