@@ -61,6 +61,15 @@ async function run() {
             return false;
         });
 
+        // --- ДОДАНИЙ БЛОК: Вивід усіх новин, що пройшли фільтр ---
+        if (filtered.length > 0) {
+            console.log(`\n🔍 СПИСОК УСІХ ЗНАЙДЕНИХ НОВИН (ДО ДЕДУПЛІКАЦІЇ):`);
+            filtered.forEach((item, idx) => {
+                console.log(`${idx + 1}. [${item.sourceName}] ${item.title}`);
+            });
+        }
+        // --------------------------------------------------------
+
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
         console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
