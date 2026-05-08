@@ -3,7 +3,6 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        // SEC вимагає пошту, але без стиснення (gzip), бо rss-parser його не перетравлює
         'User-Agent': 'Anton Vereta (anton012@gmail.com)', 
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
@@ -32,34 +31,52 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Clean XML Mode)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.2 Stable)...");
         let allItems = [];
+        let sourceStats = {};
 
         for (const feedSource of FEEDS) {
             try {
                 const feed = await parser.parseURL(feedSource.url);
-                allItems = allItems.concat(feed.items.map(i => ({ ...i, sourceName: feedSource.name })));
+                const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
+                allItems = allItems.concat(items);
+                sourceStats[feedSource.name] = items.length;
             } catch (e) {
                 console.error(`❌ Помилка джерела [${feedSource.name}]:`, e.message);
             }
         }
 
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
+        let passedBySource = { GoogleNews: 0, SEC: 0 };
+
         const filtered = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
-            return pubDate > thirtyFiveMinsAgo && hasTicker(item.title + " " + (item.contentSnippet || ""));
+            const isFresh = pubDate > thirtyFiveMinsAgo;
+            const isTarget = hasTicker(item.title + " " + (item.contentSnippet || ""));
+            
+            if (isFresh && isTarget) {
+                passedBySource[item.sourceName]++;
+                return true;
+            }
+            return false;
         });
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
-        console.log(`📊 Статистика: Знайдено ${allItems.length}, після фільтрів ${uniqueItems.length}`);
+
+        console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
+        console.log(`- Всього знайдено: ${allItems.length}`);
+        Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
+        console.log(`- Пройшли фільтр (35хв + Тікер):`);
+        Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
+        console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
         if (uniqueItems.length === 0) {
-            console.log("☕ Новин немає.");
+            console.log("☕ Нових подій немає. Завершуємо.");
             process.exit(0);
         }
 
         for (const item of uniqueItems.slice(0, 10)) {
-            console.log(`----------\nОбробка: ${item.title}`);
+            console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
             let fullText = item.contentSnippet || item.description || "";
             if (item.sourceName === 'GoogleNews') {
@@ -68,31 +85,32 @@ async function run() {
                     if (res.ok) {
                         const content = await res.text();
                         fullText = content.slice(0, 8000);
-                        console.log("✅ Текст завантажено.");
+                        console.log("✅ Повний текст отримано.");
                     }
-                } catch (e) { console.log("⚠️ Тільки сніпет."); }
+                } catch (e) { console.log("⚠️ Тільки сніпет (Таймаут або Помилка)."); }
             }
 
             await new Promise(r => setTimeout(r, 4000));
 
-            const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
-            Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або ти думаєш що вона особливо неважлива для ринку — відповідай SKIP.
+            const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
+            Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} — відповідай SKIP.
 
-            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном (без Markdown):
-            🎯 <b>Головне:</b> [Суть події. Опиши про що новина без води, але щоб була чітко зрозуміла суть]
+            КРОК 2: Сформуй звіт (HTML, без Markdown):
+            🎯 <b>Головне:</b> [Суть події без води]
             🏢 <b>Компанії:</b> [#TICKER]
-            📊 <b>Сентимент:</b> [🟢/🔴/🟡 - вплив на компанію]
+            📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
-            🧠 <b>Аналіз:</b> [Вплив на ціну акції, аналіз новини]
-            📈 <b>Опціонний кут:</b> [IV та стратегія: Iron Condor, Spreads тощо]
-            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і вплив на них]
+            🧠 <b>Аналіз:</b> [Вплив на ціну акції, логіка руху]
+            📈 <b>Опціонний кут:</b> [IV та стратегії: Iron Condor, Spreads тощо. Пиши простою мовою, як для новачка]
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів та короткий вплив на них]
 
             Текст: ${item.title} \n ${fullText}`;
 
             let success = false;
             let attempts = 0;
+            const MAX_AI_ATTEMPTS = 3; // Збільшено до 3-х спроб
 
-            while (!success && attempts < 2) {
+            while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
                     const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
                     
@@ -111,27 +129,27 @@ async function run() {
                             body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
                             signal: AbortSignal.timeout(10000)
                         });
-                        console.log("📨 Надіслано.");
+                        console.log("📨 Надіслано в Telegram.");
                     } else {
-                        console.log("⏭️ AI SKIP.");
+                        console.log("⏭️ AI вирішив пропустити (SKIP).");
                     }
                     success = true;
                 } catch (err) {
                     attempts++;
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        console.log(`⚠️ Помилка (${err.message}). Спроба ${attempts}/2. Чекаємо 15 сек...`);
+                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 15 сек...`);
                         await new Promise(r => setTimeout(r, 15000));
                     } else {
-                        console.error("❌ Помилка AI:", err.message);
+                        console.error("❌ Фатальна помилка AI:", err.message);
                         success = true; 
                     }
                 }
             }
         }
-        console.log("✅ Готово.");
+        console.log("✅ Роботу завершено успішно.");
         process.exit(0);
     } catch (error) {
-        console.error("💥 Критична помилка:", error);
+        console.error("💥 Критична помилка виконання:", error);
         process.exit(1);
     }
 }
