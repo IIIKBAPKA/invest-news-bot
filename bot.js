@@ -6,53 +6,76 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const RSS_URL = 'https://news.google.com/rss/search?q=NVDA+OR+GOOG+OR+VST+OR+"stock+market"+when:1d&hl=en-US&gl=US';
+// Джерела: Google News та SEC Filings для твоїх тікерів
+const FEEDS = [
+    'https://news.google.com/rss/search?q=NVDA+OR+GOOG+OR+VST+OR+"stock+market"+when:1d&hl=en-US&gl=US',
+    'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' 
+    // Примітка: SEC краще фільтрувати в коді по тікерах, бо їхній RSS дуже загальний
+];
 
 async function run() {
     try {
-        console.log("Запуск перевірки новин...");
-        const feed = await parser.parseURL(RSS_URL);
-        
+        console.log("Запуск перевірки новин та SEC документів...");
+        let allItems = [];
+
+        for (const url of FEEDS) {
+            try {
+                const feed = await parser.parseURL(url);
+                allItems = allItems.concat(feed.items);
+            } catch (e) {
+                console.error(`Помилка парсингу джерела ${url}:`, e.message);
+            }
+        }
+
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
-        const recentItems = feed.items.filter(item => new Date(item.pubDate).getTime() > thirtyFiveMinsAgo);
+        
+        // Фільтруємо за часом ТА приналежністю до твоїх інтересів
+        const recentItems = allItems.filter(item => {
+            const pubDate = new Date(item.pubDate || item.isoDate).getTime();
+            const content = (item.title + (item.contentSnippet || "")).toUpperCase();
+            const isTarget = content.includes("NVDA") || content.includes("GOOG") || content.includes("VST") || content.includes("MARKET");
+            return pubDate > thirtyFiveMinsAgo && isTarget;
+        });
 
         if (recentItems.length === 0) {
-            console.log("Нових новин за останні 35 хвилин немає.");
+            console.log("Нових подій за останні 35 хвилин немає.");
             process.exit(0);
         }
 
-        console.log(`Знайдено свіжих новин: ${recentItems.length}`);
+        // Видаляємо дублікати за заголовком
+        const uniqueItems = Array.from(new Map(recentItems.map(item => [item.title, item])).values());
+        console.log(`Знайдено унікальних подій: ${uniqueItems.length}`);
         
-        // Збільшили ліміт обробки до 10 новин (щоб зачепити всі важливі)
-        const itemsToProcess = recentItems.slice(0, 10); 
+        const itemsToProcess = uniqueItems.slice(0, 10); 
 
         for (const item of itemsToProcess) {
             console.log(`Оброблюємо: ${item.title}`);
             
-            const prompt = `Ти — Senior інвестиційний аналітик та експерт з торгівлі опціонами. 
-            Твоє завдання: відфільтрувати інформаційний шум і дати професійну вижимку подій.
+            const prompt = `Ти — Senior інвестиційний аналітик та експерт з опціонів. 
+            Твоє завдання: проаналізувати новину або офіційний документ SEC.
 
-            КРОК 1 (ФІЛЬТР): Оціни новину. Якщо це "вода", клікбейт, чутки без джерел, аналітика заради аналітики або просто щоденні незначні коливання цін — твоя відповідь має складатись рівно з одного слова: SKIP.
+            КРОК 1 (ФІЛЬТР): Якщо це несуттєва технічна новина, клікбейт або рутинний звіт, що не впливає на ціну — відповідай: SKIP.
+            Особлива увага SEC Filings: Форма 4 (інсайдери), 8-K (важливі події), 10-Q/K (звіти) — це ВАЖЛИВО.
 
-            КРОК 2: Якщо новина дійсно важлива (звіти, макроекономіка, M&A, інновації), сформуй звіт СУВОРО за цим HTML-шаблоном. Заповни дані в дужках [...]:
+            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном:
 
-            🎯 <b>Головне:</b> [Сформуй найважливіше з опису цієї новини. Стисло і по суті]
+            🎯 <b>Головне:</b> [Суть події. Якщо це SEC — вкажи тип форми та хто здійснив дію]
 
-            🏢 <b>Компанії:</b> [Тікери з хештегом: #NVDA, #GOOG, #VST тощо]
+            🏢 <b>Компанії:</b> [Тікери: #NVDA, #GOOG, #VST тощо]
             📊 <b>Сентимент:</b> [🟢 Позитивний / 🔴 Негативний / 🟡 Нейтральний]
-            🔥 <b>Важливість:</b> [Оцінка 1-10]/10
+            🔥 <b>Важливість:</b> [1-10]/10
 
             🧠 <b>Аналіз:</b>
-            [2-3 тези про вплив на акції в середньостроковій перспективі.]
+            [Як це вплине на акції. Інсайдерська покупка — це часто бичачий сигнал, продаж — залежить від обсягу.]
 
             📈 <b>Опціонний кут (IV & Strategy):</b>
-            [Оціни вплив на очікувану волатильність (IV). Чи є умови для продажу премії (Iron Condor, Credit Spreads) через очікуване падіння IV (IV Crush), чи подія створює умови для купівлі волатильності?]
+            [Вплив на IV. Чи варто продавати премію (Iron Condor, Credit Spreads) чи купувати волатильність?]
 
-            ⚔️ <b>Конкуренти:</b>
-            [Хто може виграти чи програти? Тікери через #]
+            ⚔️ <b>Конкуренти:</b> [Тікери через #]
 
-            ВАЖЛИВО: Не використовуй Markdown (* або #, окрім тікерів). Відповідай українською мовою.
-            Новина: ${item.title} — ${item.contentSnippet || item.description}`;
+            ВАЖЛИВО: Не використовуй Markdown. Відповідай українською мовою.
+            Джерело: ${item.link}
+            Подія: ${item.title} — ${item.contentSnippet || item.description}`;
 
             let responseText = "";
             let attempt = 0;
@@ -66,46 +89,28 @@ async function run() {
                     break;
                 } catch (err) {
                     attempt++;
-                    console.warn(`Спроба ${attempt} невдала: ${err.message}`);
-                    if (attempt >= maxAttempts) {
-                        responseText = "ERROR"; // Маркер помилки
-                    } else {
-                        await new Promise(res => setTimeout(res, 10000));
-                    }
+                    if (attempt >= maxAttempts) responseText = "ERROR";
+                    else await new Promise(res => setTimeout(res, 10000));
                 }
             }
 
-            // МАГІЯ ФІЛЬТРАЦІЇ: Якщо ШІ сказав SKIP або впав — ігноруємо новину
-            if (responseText.startsWith("SKIP") || responseText === "ERROR") {
-                console.log(`Новина пропущена (Неважлива або помилка API): ${item.title}`);
-                continue; 
-            }
+            if (responseText.startsWith("SKIP") || responseText === "ERROR") continue; 
 
-            // Якщо новина пройшла фільтр, формуємо красиве повідомлення
-            const message = `📰 <a href="${item.link}">${item.title}</a>\n\n${responseText}`;
+            const message = `🔔 <b>Нова подія на ринку</b>\n📰 <a href="${item.link}">${item.title}</a>\n\n${responseText}`;
 
-            const tgUrl = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-            const tgResponse = await fetch(tgUrl, {
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     chat_id: TELEGRAM_CHAT_ID,
                     text: message,
                     parse_mode: 'HTML',
-                    disable_web_page_preview: true // Відключаємо величезне прев'ю посилання знизу, бо у нас і так є текст
+                    disable_web_page_preview: true
                 })
             });
             
-            if (tgResponse.ok) {
-                console.log("Успішно відправлено крутий звіт!");
-            } else {
-                console.error("Помилка Telegram:", await tgResponse.text());
-            }
-            
             await new Promise(res => setTimeout(res, 3000));
         }
-        
-        console.log("Роботу завершено!");
         process.exit(0);
     } catch (error) {
         console.error("Помилка:", error);
