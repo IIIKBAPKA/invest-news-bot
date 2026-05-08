@@ -40,18 +40,46 @@ async function run() {
             }
         }
 
+        // Зміни на (24 * 60 * 60 * 1000) для тесту за добу, або залиш 35 хвилин для крона
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);    
         
+        // Лічильники для "Рентгену"
+        let skippedByTime = 0;
+        let skippedByTicker = 0;
+
         const recentItems = allItems.filter(item => {
-            const pubDate = new Date(item.pubDate || item.isoDate).getTime();
-            const titleUpper = item.title.toUpperCase();
-            const content = item.title + " " + (item.contentSnippet || "");
+            // Перевіряємо, чи є дата. Якщо немає, ставимо 0, щоб новина відкинулась як стара
+            const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
+            const titleUpper = (item.title || "").toUpperCase();
+            const content = (item.title || "") + " " + (item.contentSnippet || "");
             
             if (titleUpper.includes("424B2")) return false;
 
+            const isFresh = pubDate > thirtyFiveMinsAgo;
             const isTarget = targetRegex.test(content);
-            return pubDate > thirtyFiveMinsAgo && isTarget;
+            
+            // Якщо новина стара — плюсуємо лічильник часу і відкидаємо
+            if (!isFresh) {
+                skippedByTime++;
+                return false;
+            }
+            
+            // Якщо свіжа, але не про наш тікер — логуємо і відкидаємо
+            if (!isTarget) {
+                skippedByTicker++;
+                console.log(`[Локальний Фільтр] Пропущено (немає цільових тікерів): ${item.title}`);
+                return false;
+            }
+
+            return true;
         });
+
+        // Виводимо красиву статистику
+        console.log(`\n📊 Статистика парсингу:`);
+        console.log(`- Всього завантажено з джерел: ${allItems.length}`);
+        console.log(`- Відкинуто (старіші за наш час): ${skippedByTime}`);
+        console.log(`- Відкинуто (немає наших тікерів): ${skippedByTicker}`);
+        console.log(`- Пройшли далі для аналізу ШІ: ${recentItems.length}\n`);
 
         if (recentItems.length === 0) {
             console.log("Нових подій по портфелю немає. Завершуємо роботу.");
@@ -59,7 +87,7 @@ async function run() {
         }
 
         const uniqueItems = Array.from(new Map(recentItems.map(item => [item.title, item])).values());
-        console.log(`Локальний фільтр пройдено. Знайдено подій: ${uniqueItems.length}.`);
+        console.log(`Знайдено унікальних подій: ${uniqueItems.length}. Починаємо обробку...`);
         
         const itemsToProcess = uniqueItems.slice(0, 5); 
 
