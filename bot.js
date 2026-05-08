@@ -40,16 +40,17 @@ const TARGET_COMPANIES = {
 const ALL_TARGETS = [...Object.keys(TARGET_COMPANIES), ...Object.values(TARGET_COMPANIES).flat()];
 
 const tickerQuery = Object.keys(TARGET_COMPANIES).join(" OR ");
+
+// ОНОВЛЕНО: Замінили Google News на Bing News RSS
 const FEEDS = [
-    { name: 'GoogleNews', url: `https://news.google.com/rss/search?q=${encodeURIComponent(tickerQuery)}+when:1d&hl=en-US&gl=US` },
-    // Збільшено count до 100 для SEC, щоб не пропускати важливі звіти
+    { name: 'BingNews', url: `https://www.bing.com/news/search?q=${encodeURIComponent(tickerQuery)}&format=rss` },
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=100&output=atom' } 
 ];
 
 const hasTicker = (text) => {
     const upperText = text.toUpperCase();
     return ALL_TARGETS.some(target => {
-        // Шукаємо повне співпадіння слова (\b), щоб не ловити "AMD" у "KODIAK"
+        // Шукаємо повне співпадіння слова (\b)
         const regex = new RegExp(`\\b${target.toUpperCase()}\\b`, 'i');
         return regex.test(upperText);
     });
@@ -57,7 +58,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: Повернення до надійного RSS + 32 хв)...");
+        console.log("🚀 Запуск моніторингу (Версія: Надійний RSS Bing + SEC | 32 хв)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -73,7 +74,7 @@ async function run() {
         }
 
         const thirtyFiveMinsAgo = Date.now() - (32 * 60 * 1000); 
-        let passedBySource = { GoogleNews: 0, SEC: 0 };
+        let passedBySource = { BingNews: 0, SEC: 0 }; // Оновлено назву джерела в лічильнику
 
         const filtered = allItems.filter(item => {
             const rawDate = item.pubDate || item.isoDate || 0;
@@ -82,6 +83,7 @@ async function run() {
             const isTarget = hasTicker(item.title + " " + (item.contentSnippet || ""));
             
             if (isFresh && isTarget) {
+                if (!passedBySource[item.sourceName]) passedBySource[item.sourceName] = 0;
                 passedBySource[item.sourceName]++;
                 return true;
             }
@@ -115,7 +117,7 @@ async function run() {
             console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
             let fullText = item.contentSnippet || item.description || "";
-            if (item.sourceName === 'GoogleNews') {
+            if (item.sourceName === 'BingNews') { // Оновлено перевірку
                 try {
                     const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
                     if (res.ok) {
