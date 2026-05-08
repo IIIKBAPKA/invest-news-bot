@@ -14,23 +14,13 @@ async function run() {
         const feed = await parser.parseURL(RSS_URL);
         
         console.log(`Всього знайдено новин у стрічці: ${feed.items.length}`);
-        if (feed.items.length > 0) {
-            console.log(`Найсвіжіша новина в RSS датована: ${feed.items[0].pubDate}`);
-        }
-
-        // Вікно пошуку — 12 годин
-        const timeWindow = Date.now() - (12 * 60 * 60 * 1000);
-        const recentItems = feed.items.filter(item => new Date(item.pubDate).getTime() > timeWindow);
-
-        if (recentItems.length === 0) {
-            console.log("Нових новин за вказаний час немає.");
+        if (feed.items.length === 0) {
+            console.log("Стрічка порожня.");
             return;
         }
 
-        console.log(`Пройшли фільтр часу: ${recentItems.length} новин.`);
-
-        // Беремо ТІЛЬКИ ОДНУ новину для тесту
-        const itemsToProcess = recentItems.slice(0, 1); 
+        // Беремо найпершу новину зі списку БЕЗ перевірки дати
+        const itemsToProcess = feed.items.slice(0, 1); 
 
         for (const item of itemsToProcess) {
             console.log(`Оброблюємо новину: ${item.title}`);
