@@ -19,7 +19,6 @@ async function run() {
             return;
         }
 
-        // Беремо найпершу новину зі списку БЕЗ перевірки дати
         const itemsToProcess = feed.items.slice(0, 1); 
 
         for (const item of itemsToProcess) {
@@ -28,7 +27,8 @@ async function run() {
             1. Зроби короткий підсумок (до 3-х тез).
             2. Оціни загальний вплив на ринок (Позитивний / Негативний / Нейтральний).
             3. Якщо згадуються конкретні компанії (особливо GOOG, NVDA, VST), виділи це.
-            Мова відповіді: Українська.
+            
+            ВАЖЛИВО: Відповідай українською мовою. Не використовуй форматування Markdown (жодних зірочок ** чи решіток). Пиши звичайним простим текстом.
             
             Новина: ${item.title} — ${item.contentSnippet || item.description}`;
 
@@ -36,7 +36,8 @@ async function run() {
             const result = await model.generateContent(prompt);
             const response = result.response.text();
 
-            const message = `📰 **${item.title}**\n\n${response}\n\n🔗 [Джерело](${item.link})`;
+            // Змінили розмітку на надійний HTML
+            const message = `📰 <b>${item.title}</b>\n\n${response}\n\n🔗 <a href="${item.link}">Джерело</a>`;
 
             const tgUrl = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
             const tgResponse = await fetch(tgUrl, {
@@ -45,7 +46,7 @@ async function run() {
                 body: JSON.stringify({
                     chat_id: TELEGRAM_CHAT_ID,
                     text: message,
-                    parse_mode: 'Markdown'
+                    parse_mode: 'HTML' // Змінили Markdown на HTML
                 })
             });
             
