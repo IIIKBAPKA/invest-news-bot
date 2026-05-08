@@ -57,7 +57,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: Повернення до надійного RSS + 35 хв)...");
+        console.log("🚀 Запуск моніторингу (Версія: Повернення до надійного RSS + 32 хв)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -72,7 +72,7 @@ async function run() {
             }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000); 
+        const thirtyFiveMinsAgo = Date.now() - (32 * 60 * 1000); 
         let passedBySource = { GoogleNews: 0, SEC: 0 };
 
         const filtered = allItems.filter(item => {
@@ -102,7 +102,7 @@ async function run() {
         console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр (35хв + Тікер/Назва):`);
+        console.log(`- Пройшли фільтр (32хв + Тікер/Назва):`);
         Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
         console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
