@@ -19,19 +19,18 @@ const TARGET_TICKERS = [
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
-// Список надійних джерел для Google News
+// Список сайтів, яким ми довіряємо (фільтруємо всередині коду)
 const TRUSTED_SITES = [
-    "investing.com",
-    "benzinga.com",
+    "investing.com", "benzinga.com", "marketwatch.com", "reuters.com", 
+    "cnbc.com", "bloomberg.com", "seekingalpha.com", "thefly.com", "barrons.com"
 ];
 
-const sitesQuery = TRUSTED_SITES.map(site => `site:${site}`).join("+OR+");
 const tickerQuery = TARGET_TICKERS.join("+OR+");
 
 const FEEDS = [
     { 
         name: 'GoogleNews', 
-        url: `https://news.google.com/rss/search?q=(${tickerQuery})+AND+(${sitesQuery})+when:1d&hl=en-US&gl=US` 
+        url: `https://news.google.com/rss/search?q=(${tickerQuery})+when:1d&hl=en-US&gl=US` 
     },
     { 
         name: 'SEC', 
@@ -43,7 +42,7 @@ const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
 
 async function run() {
     try {
-        console.log("Запуск перевірки новин (Targeted Google News) та SEC документів...");
+        console.log("Запуск перевірки новин (Broad Google News) та SEC документів...");
         let allItems = [];
 
         for (const feedSource of FEEDS) {
@@ -64,16 +63,22 @@ async function run() {
         
         let skippedByTime = 0;
         let skippedByTicker = 0;
+        let skippedBySource = 0;
 
         const recentItems = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
             const titleUpper = (item.title || "").toUpperCase();
             const content = (item.title || "") + " " + (item.contentSnippet || "");
+            const link = (item.link || "").toLowerCase();
             
             if (titleUpper.includes("424B2")) return false;
 
             const isFresh = pubDate > thirtyFiveMinsAgo;
             const isTarget = targetRegex.test(content);
+            
+            // ПЕРЕВІРКА ДЖЕРЕЛА: Тільки SEC або сайти з нашого WhiteList
+            const isTrustedSource = item.sourceName === 'SEC' || 
+                                    TRUSTED_SITES.some(site => link.includes(site));
             
             if (!isFresh) {
                 skippedByTime++;
@@ -82,7 +87,12 @@ async function run() {
             
             if (!isTarget) {
                 skippedByTicker++;
-                console.log(`[Фільтр] Пропущено [${item.sourceName}]: ${item.title}`);
+                return false;
+            }
+
+            if (!isTrustedSource) {
+                skippedBySource++;
+                console.log(`[Фільтр Джерела] Пропущено (не з WhiteList): ${item.title}`);
                 return false;
             }
 
@@ -90,9 +100,10 @@ async function run() {
         });
 
         console.log(`\n📊 Статистика парсингу:`);
-        console.log(`- Всього завантажено з джерел: ${allItems.length}`);
-        console.log(`- Відкинуто (старіші за наш час): ${skippedByTime}`);
-        console.log(`- Відкинуто (немає наших тікерів): ${skippedByTicker}`);
+        console.log(`- Всього завантажено: ${allItems.length}`);
+        console.log(`- Відкинуто (старі): ${skippedByTime}`);
+        console.log(`- Відкинуто (немає тікера): ${skippedByTicker}`);
+        console.log(`- Відкинуто (недостовірне джерело): ${skippedBySource}`);
         console.log(`- Пройшли далі для аналізу ШІ: ${recentItems.length}\n`);
 
         if (recentItems.length === 0) {
@@ -100,7 +111,6 @@ async function run() {
             process.exit(0);
         }
 
-        // Дедуплікація за заголовком
         const uniqueItems = Array.from(new Map(recentItems.map(item => [item.title, item])).values());
         console.log(`Знайдено унікальних подій: ${uniqueItems.length}. Починаємо обробку...`);
         
@@ -111,7 +121,6 @@ async function run() {
             
             let fullArticleText = item.contentSnippet || item.description || "";
             
-            // Завантажуємо повний текст ТІЛЬКИ для новин (SEC аналізуємо по сніпету)
             if (item.sourceName === 'GoogleNews') {
                 console.log(`Завантажуємо повний текст статті через Jina...`);
                 try {
