@@ -3,7 +3,6 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        // Додав маскування під звичайний браузер, щоб Seeking Alpha не блокував запити
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
@@ -37,17 +36,13 @@ const TARGET_COMPANIES = {
     "1VOW3": ["VOLKSWAGEN"]
 };
 
-// Плаский список усіх слів для пошуку (тікери + назви)
 const ALL_TARGETS = [...Object.keys(TARGET_COMPANIES), ...Object.values(TARGET_COMPANIES).flat()];
 
-// Базовий масив фідів
 const FEEDS = [
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=100&output=atom' } 
 ];
 
-// ОНОВЛЕННЯ: Додаємо індивідуальні RSS-запити до Seeking Alpha для кожного тікера
 Object.keys(TARGET_COMPANIES).forEach(ticker => {
-    // 1VOW3 може не спрацювати в SA напряму, але додаємо загальне правило
     FEEDS.push({ 
         name: 'SeekingAlpha', 
         url: `https://seekingalpha.com/api/sa/combined/${ticker}.xml` 
@@ -57,7 +52,6 @@ Object.keys(TARGET_COMPANIES).forEach(ticker => {
 const hasTicker = (text) => {
     const upperText = text.toUpperCase();
     return ALL_TARGETS.some(target => {
-        // Шукаємо повне співпадіння слова (\b)
         const regex = new RegExp(`\\b${target.toUpperCase()}\\b`, 'i');
         return regex.test(upperText);
     });
@@ -65,7 +59,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: Seeking Alpha + SEC | 32 хв)...");
+        console.log("🚀 Запуск моніторингу (Версія: ТЕСТ Seeking Alpha + SEC | 24 години)...");
         let allItems = [];
         let sourceStats = { SeekingAlpha: 0, SEC: 0 };
 
@@ -76,12 +70,12 @@ async function run() {
                 allItems = allItems.concat(items);
                 sourceStats[feedSource.name] += items.length;
             } catch (e) {
-                // Якщо SA заблокує парсер, ми побачимо це тут
                 // console.error(`❌ Помилка джерела [${feedSource.name}]:`, e.message);
             }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (32 * 60 * 1000); 
+        // ЗМІНЕНО НА 24 ГОДИНИ ДЛЯ ТЕСТУ
+        const thirtyFiveMinsAgo = Date.now() - (24 * 60 * 60 * 1000); 
         let passedBySource = { SeekingAlpha: 0, SEC: 0 };
 
         const filtered = allItems.filter(item => {
@@ -106,13 +100,12 @@ async function run() {
             });
         }
 
-        // Тільки базова дедуплікація (за ідентичною назвою)
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
         console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр (32хв + Тікер/Назва):`);
+        console.log(`- Пройшли фільтр (24 год + Тікер/Назва):`);
         Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
         console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
