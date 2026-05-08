@@ -3,7 +3,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        'User-Agent': 'Anton Vereta (anton012@gmail.com)', 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', 
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
 });
@@ -32,7 +32,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.3 Stable)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.4 Extreme Stability)...");
         let allItems = [];
         let sourceStats = {};
 
@@ -85,13 +85,15 @@ async function run() {
                     const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
                     if (res.ok) {
                         const content = await res.text();
-                        fullText = content.slice(0, 8000); // Повернув твій ліміт символів
-                        console.log("✅ Повний текст завантажено.");
+                        // ЗМЕНШЕНО ДО 2500 СИМВОЛІВ для стабільності на Free Tier
+                        fullText = content.slice(0, 2500);
+                        console.log("✅ Текст оптимізовано (2.5k).");
                     }
                 } catch (e) { console.log("⚠️ Тільки сніпет."); }
             }
 
-            await new Promise(r => setTimeout(r, 4000));
+            // ПАУЗА 8 СЕКУНД (Cool-down)
+            await new Promise(r => setTimeout(r, 8000));
 
             const prompt = `Ти — Senior інвестиційний аналітик який читає надану новину і намагається з неї взяти все найважливіше і детально проаналізувати. 
             Якщо новина НЕ стосується тікерів ${TARGET_TICKERS.join(', ')} або ти думаєш що вона особливо неважлива для ринку — відповідай SKIP. Важливо зберігати при відповіді мені формат шаблону
@@ -121,7 +123,7 @@ async function run() {
                     
                     const result = await Promise.race([
                         model.generateContent(prompt),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 40000))
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 45000))
                     ]);
 
                     const response = result.response.text().trim();
@@ -132,7 +134,7 @@ async function run() {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
-                            signal: AbortSignal.timeout(10000)
+                            signal: AbortSignal.timeout(12000)
                         });
                         console.log("📨 Надіслано.");
                     } else {
@@ -142,8 +144,10 @@ async function run() {
                 } catch (err) {
                     attempts++;
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 20 сек...`);
-                        await new Promise(r => setTimeout(r, 20000));
+                        // ЕКСПОНЕНЦІАЛЬНЕ ОЧІКУВАННЯ: 30, 60 секунд
+                        const waitTime = attempts * 30000;
+                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо ${waitTime/1000} сек...`);
+                        await new Promise(r => setTimeout(r, waitTime));
                     } else {
                         console.error("❌ Помилка AI:", err.message);
                         success = true; 
