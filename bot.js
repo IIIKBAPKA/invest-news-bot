@@ -67,7 +67,7 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу ( Seeking Alpha + SEC | Інтервал: 15 хв)...");
+        console.log("🚀 Запуск моніторингу ( Seeking Alpha + SEC | Інтервал: 16 хв)...");
         let allItems = [];
         let sourceStats = { SeekingAlpha: 0, SEC: 0 };
 
@@ -83,7 +83,6 @@ async function run() {
             }
         }
 
-        // БОЙОВИЙ ЧАС: 16 хвилин (з невеликим запасом для 16-хвилинного циклу)
         const windowTime = Date.now() - (16 * 60 * 1000); 
         let passedBySource = { SeekingAlpha: 0, SEC: 0 };
 
@@ -94,7 +93,6 @@ async function run() {
             const isTarget = hasTicker(item.title + " " + (item.contentSnippet || ""));
             
             if (isFresh && isTarget) {
-                if (!passedBySource[item.sourceName]) passedBySource[item.sourceName] = 0;
                 passedBySource[item.sourceName]++;
                 return true;
             }
@@ -103,15 +101,20 @@ async function run() {
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
-        console.log(`📊 СТАТИСТИКА: Унікальних новин для ШІ: ${uniqueItems.length}`);
+        console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
+        console.log(`- Всього знайдено: ${allItems.length}`);
+        Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
+        console.log(`- Пройшли фільтр (16хв + Тікер/Назва):`);
+        Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
+        console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
         if (uniqueItems.length === 0) {
-            console.log("☕ Нових подій немає.");
+            console.log("☕ Нових подій немає. Завершуємо.");
             process.exit(0);
         }
 
         for (const item of uniqueItems) {
-            console.log(`----------\nОбробка: ${item.title}`);
+            console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
             let fullText = item.contentSnippet || item.description || "";
             if (item.sourceName === 'SeekingAlpha') {
@@ -120,11 +123,10 @@ async function run() {
                     if (res.ok) {
                         const content = await res.text();
                         fullText = content.slice(0, 8000);
+                        console.log("✅ Повний текст отримано.");
                     }
                 } catch (e) { console.log("⚠️ Тільки сніпет."); }
             }
-
-            await new Promise(r => setTimeout(r, 2000));
 
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
             Якщо вона НЕ стосується тікерів: ${Object.keys(TARGET_COMPANIES).join(', ')} або новина неважлива (ти визначив Важливість по шаблону як <=3) чи просто інформаційний шум без конкретної новини — відповідай SKIP.
@@ -146,22 +148,61 @@ async function run() {
 
             Текст: ${item.title} \n ${fullText}`;
 
-            try {
-                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-8b" }); // Можна змінити на flash-lite для економії
-                const result = await model.generateContent(prompt);
-                const response = result.response.text().trim();
+            let success = false;
+            let attempts = 0;
+            const MAX_AI_ATTEMPTS = 3; 
 
-                if (!response.includes("SKIP")) {
-                    const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
-                    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true })
-                    });
-                    console.log("📨 Надіслано.");
-                } else console.log("⏭️ SKIP.");
-            } catch (err) {
-                console.error("⚠️ Помилка ШІ для цієї новини.");
+            while (!success && attempts < MAX_AI_ATTEMPTS) {
+                try {
+                    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-8b" });
+                    const result = await Promise.race([
+                        model.generateContent(prompt),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 15000))
+                    ]);
+
+                    const response = result.response.text().trim();
+
+                    if (!response.includes("SKIP")) {
+                        let safeResponse = response.replace(/<\/?(?!(b|i|a|code|s|u)\b)[^>]+>/gi, '');
+                        const tags = ['b', 'i', 'a', 'code', 's', 'u'];
+                        tags.forEach(tag => {
+                            const opened = (safeResponse.match(new RegExp(`<${tag}(\\s|>|/)`, 'g')) || []).length;
+                            const closed = (safeResponse.match(new RegExp(`</${tag}>`, 'g')) || []).length;
+                            if (opened > closed) {
+                                safeResponse += `</${tag}>`.repeat(opened - closed);
+                            }
+                        });
+
+                        const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${safeResponse}`;
+                        
+                        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
+                            signal: AbortSignal.timeout(10000)
+                        });
+
+                        console.log("📨 Надіслано в Telegram.");
+                    } else console.log("⏭️ SKIP.");
+                    
+                    success = true;
+                } catch (err) {
+                    attempts++;
+                    console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}): ${err.message}`);
+                    
+                    if (attempts < MAX_AI_ATTEMPTS) {
+                        await new Promise(r => setTimeout(r, 2000));
+                    } else {
+                        // Якщо всі спроби вичерпані, відправляємо хоча б посилання та заголовок
+                        const fallbackMsg = `🔔 <b>Новина (Без аналізу):</b> <a href="${item.link}">${item.title}</a>\n\n<i>⚠️ AI тимчасово недоступний.</i>`;
+                        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: fallbackMsg, parse_mode: 'HTML' })
+                        });
+                        success = true;
+                    }
+                }
             }
         }
         process.exit(0);
