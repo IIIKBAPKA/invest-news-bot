@@ -46,7 +46,7 @@ async function run() {
             }
         }
 
-        const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
+        const thirtyFiveMinsAgo = Date.now() - (60 * 60 * 1000);
         let passedBySource = { GoogleNews: 0, SEC: 0 };
 
         const filtered = allItems.filter(item => {
