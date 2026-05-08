@@ -12,18 +12,20 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Твій портфель. Тепер ми передаємо його безпосередньо в мозок ШІ
+// Тільки компанії, нічого зайвого
 const TARGET_TICKERS = [
     "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
     "CVX", "XOM", "ADBE", "AMZN", "1VOW3", "KO", "MSFT", 
     "NFLX", "META", "AMD", "SPY", "QQQ"
 ];
 
-// Перейшли на професійне джерело (MarketWatch) + SEC
 const FEEDS = [
     'https://feeds.marketwatch.com/marketwatch/topstories',
     'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' 
 ];
+
+// Суворий фільтр: шукаємо тільки точні співпадіння тікерів
+const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
 
 async function run() {
     try {
@@ -39,62 +41,58 @@ async function run() {
             }
         }
 
-        // Для тестування можна поставити 24 години (24 * 60 * 60 * 1000)
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);    
         
         const recentItems = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate).getTime();
             const titleUpper = item.title.toUpperCase();
+            const content = item.title + " " + (item.contentSnippet || "");
             
-            // Фільтруємо технічний спам від банків
             if (titleUpper.includes("424B2")) return false;
 
-            // Більше ніяких regex для тікерів! Беремо всі свіжі новини.
-            return pubDate > thirtyFiveMinsAgo;
+            // Фільтр-снайпер: тільки наші тікери
+            const isTarget = targetRegex.test(content);
+            
+            return pubDate > thirtyFiveMinsAgo && isTarget;
         });
 
         if (recentItems.length === 0) {
-            console.log("Нових подій за останні 35 хвилин немає.");
+            console.log("Нових подій по портфелю немає. Завершуємо роботу.");
             process.exit(0);
         }
 
         const uniqueItems = Array.from(new Map(recentItems.map(item => [item.title, item])).values());
-        console.log(`Знайдено унікальних подій для аналізу ШІ: ${uniqueItems.length}`);
+        console.log(`Локальний фільтр пройдено. Знайдено подій для ШІ: ${uniqueItems.length}`);
         
-        // Збільшили ліміт обробки, щоб ШІ міг перевірити більше новин
-        const itemsToProcess = uniqueItems.slice(0, 15); 
+        // Беремо максимум 5 новин, щоб не перевантажувати логіку
+        const itemsToProcess = uniqueItems.slice(0, 5); 
 
         for (const item of itemsToProcess) {
             console.log(`----------\nОброблюємо: ${item.title}`);
             
-            // Затримка ПЕРЕД запитом до ШІ (щоб не перевищити ліміт 15 запитів/хвилина на Free Tier)
             await new Promise(res => setTimeout(res, 4000));
 
             const prompt = `Ти — Senior інвестиційний аналітик та експерт з торгівлі опціонами. 
-            Ось список акцій, за якими я слідкую: ${TARGET_TICKERS.join(', ')}.
-
-            Твоє завдання: проаналізувати новину або документ SEC.
 
             КРОК 1 (ФІЛЬТР СУВОРОСТІ): 
-            - Якщо новина НЕ стосується жодної компанії з мого списку І НЕ є критичною макроекономічною подією (ФРС, інфляція, ринок праці США) — відповідай лише одним словом: SKIP.
-            - Якщо це просто щоденні незначні коливання, "вода" або загальна аналітика без конкретики — відповідай: SKIP.
+            - Якщо новина не містить конкретики або це "вода" — відповідай: SKIP.
             - Форми SEC: Форма 4 (інсайдери), 8-K, 10-Q/K для моїх компаній — це завжди ВАЖЛИВО.
 
-            КРОК 2: Якщо новина дійсно важлива для мене, сформуй звіт СУВОРО за HTML-шаблоном. Не використовуй Markdown (** чи *). Заповни дані в дужках [...]:
+            КРОК 2: Сформуй звіт СУВОРО за HTML-шаблоном. Не використовуй Markdown (** чи *). Заповни дані в дужках [...]:
 
             🎯 <b>Головне:</b> [Суть події. Якщо це SEC — вкажи тип форми та хто здійснив дію]
 
-            🏢 <b>Компанії:</b> [Тікери: #NVDA, #GOOG, #SPY тощо]
+            🏢 <b>Компанії:</b> [Тікери з хештегом]
             📊 <b>Сентимент:</b> [🟢 Позитивний / 🔴 Негативний / 🟡 Нейтральний]
             🔥 <b>Важливість:</b> [1-10]/10
 
             🧠 <b>Аналіз:</b>
-            [Як це вплине на ціну. Коротко і по суті.]
+            [Як це вплине на ціну акції. Коротко і по суті.]
 
             📈 <b>Опціонний кут (IV & Strategy):</b>
             [Вплив на IV. Чи варто продавати премію (Iron Condor, Credit Spreads) чи купувати волатильність?]
 
-            ⚔️ <b>Конкуренти:</b> [Тікери через #]
+            ⚔️ <b>Конкуренти:</b> [Хто з конкурентів може виграти/програти, вкажи тікери]
 
             ВАЖЛИВО: Відповідай українською мовою.
             Джерело: ${item.link}
@@ -106,7 +104,6 @@ async function run() {
 
             while (attempt < maxAttempts) {
                 try {
-                    // Використовуємо 2.0-flash (актуальна модель з високими лімітами)
                     const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
                     const result = await model.generateContent(prompt);
                     responseText = result.response.text().trim();
@@ -117,14 +114,15 @@ async function run() {
                     if (attempt >= maxAttempts) {
                         responseText = "ERROR";
                     } else {
-                        console.log(`[API Cooldown] Зачекаємо 60 секунд перед наступною спробою...`);
-                        await new Promise(res => setTimeout(res, 60000));
+                        // Зменшили паузу до 20 секунд, щоб GitHub не вбивав процес через тайм-аут
+                        console.log(`[API Cooldown] Зачекаємо 20 секунд перед наступною спробою...`);
+                        await new Promise(res => setTimeout(res, 20000));
                     }
                 }
             }
 
             if (responseText.startsWith("SKIP")) {
-                console.log(`[AI SKIP] Новина не про портфель або неважлива: ${item.title}`);
+                console.log(`[AI SKIP] Новина визнана неважливою ШІ: ${item.title}`);
                 continue;
             }
             
@@ -152,8 +150,7 @@ async function run() {
                 console.error(`[TG ERROR] Помилка відправки: ${await tgResponse.text()}`);
             }
             
-            // Невелика пауза після відправки, щоб Telegram не заблокував за спам
-            await new Promise(res => setTimeout(res, 2000));
+            await new Promise(res => setTimeout(res, 3000));
         }
         
         console.log("----------\nРоботу завершено успішно!");
