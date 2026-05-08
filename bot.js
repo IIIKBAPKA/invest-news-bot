@@ -1,9 +1,18 @@
 const Parser = require('rss-parser');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const parser = new Parser({
+// Парсер 1: Маскування під браузер для Seeking Alpha
+const parserSA = new Parser({
     headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 
+        'Accept': 'application/atom+xml, application/xml, text/xml',
+    },
+});
+
+// Парсер 2: Чесний User-Agent з email для урядового сайту SEC
+const parserSEC = new Parser({
+    headers: {
+        'User-Agent': 'Anton Vereta (anton012@gmail.com)', 
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
 });
@@ -12,7 +21,6 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Словник для точного пошуку тікерів та назв компаній
 const TARGET_COMPANIES = {
     "NVDA": ["NVIDIA"],
     "GOOG": ["GOOGLE", "ALPHABET"],
@@ -59,22 +67,28 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: ТЕСТ Seeking Alpha + SEC | 24 години)...");
+        console.log("🚀 Запуск моніторингу (Версія: Seeking Alpha + SEC Dual Parser | ТЕСТ 24 год)...");
         let allItems = [];
         let sourceStats = { SeekingAlpha: 0, SEC: 0 };
 
         for (const feedSource of FEEDS) {
             try {
-                const feed = await parser.parseURL(feedSource.url);
+                // Обираємо правильний парсер залежно від джерела
+                const activeParser = feedSource.name === 'SEC' ? parserSEC : parserSA;
+                
+                const feed = await activeParser.parseURL(feedSource.url);
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
                 allItems = allItems.concat(items);
                 sourceStats[feedSource.name] += items.length;
             } catch (e) {
-                // console.error(`❌ Помилка джерела [${feedSource.name}]:`, e.message);
+                // Не виводимо помилки SA, але якщо впаде SEC - побачимо
+                if (feedSource.name === 'SEC') {
+                   console.error(`❌ Помилка джерела [${feedSource.name}]:`, e.message);
+                }
             }
         }
 
-        // ЗМІНЕНО НА 24 ГОДИНИ ДЛЯ ТЕСТУ
+        // ТЕСТОВИЙ РЕЖИМ: 24 години
         const thirtyFiveMinsAgo = Date.now() - (24 * 60 * 60 * 1000); 
         let passedBySource = { SeekingAlpha: 0, SEC: 0 };
 
@@ -114,6 +128,7 @@ async function run() {
             process.exit(0);
         }
 
+        // ТЕСТОВИЙ РЕЖИМ: Обмежуємо до 10 новин
         for (const item of uniqueItems.slice(0, 10)) {
             console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
