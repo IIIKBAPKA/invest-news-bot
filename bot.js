@@ -3,7 +3,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        'User-Agent': 'Anton Vereta (anton012@gmail.com)', 
+        // Офіційна вимога SEC для ідентифікації бота
+        'User-Agent': 'InvestAnalyticsBot/1.0 (anton012@gmail.com)',
+        'Host': 'www.sec.gov',
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
 });
@@ -31,12 +33,14 @@ const hasTicker = (text) => {
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (Версія: 3.2 Stable)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.2.2 Optimized Stable)...");
         let allItems = [];
         let sourceStats = {};
 
         for (const feedSource of FEEDS) {
             try {
+                // Невелика пауза між запитами до джерел для стабільності
+                await new Promise(r => setTimeout(r, 2000));
                 const feed = await parser.parseURL(feedSource.url);
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
                 allItems = allItems.concat(items);
@@ -84,8 +88,11 @@ async function run() {
                     const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
                     if (res.ok) {
                         const content = await res.text();
-                        fullText = content.slice(0, 8000);
-                        console.log("✅ Повний текст отримано.");
+                        // Оптимізація тексту: видалення зайвих пробілів та обрізка до 4000 симв.
+                        fullText = content
+                            .replace(/\s+/g, ' ')
+                            .slice(0, 4000);
+                        console.log(`✅ Текст завантажено та оптимізовано (${fullText.length} симв.)`);
                     }
                 } catch (e) { console.log("⚠️ Тільки сніпет (Таймаут або Помилка)."); }
             }
@@ -108,7 +115,7 @@ async function run() {
 
             let success = false;
             let attempts = 0;
-            const MAX_AI_ATTEMPTS = 3; // Збільшено до 3-х спроб
+            const MAX_AI_ATTEMPTS = 3; 
 
             while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
@@ -140,7 +147,7 @@ async function run() {
                         console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 15 сек...`);
                         await new Promise(r => setTimeout(r, 15000));
                     } else {
-                        console.error("❌ Фатальна помилка AI:", err.message);
+                        console.error(`❌ Фатальна помилка AI: ${err.message}`);
                         success = true; 
                     }
                 }
