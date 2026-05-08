@@ -3,7 +3,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const parser = new Parser({
     headers: {
-        'User-Agent': 'InvestAnalyticsBot/1.0 (anton012@gmail.com)',
+        'User-Agent': 'Anton Vereta (anton012@gmail.com)', 
         'Accept': 'application/atom+xml, application/xml, text/xml',
     },
 });
@@ -24,22 +24,19 @@ const FEEDS = [
     { name: 'SEC', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=&company=&paction=getcurrent&count=40&output=atom' } 
 ];
 
-const targetRegex = new RegExp(`\\b(${TARGET_TICKERS.join('|')})\\b`, 'i');
-
-const hasTicker = (item) => {
-    const textToSearch = `${item.title} ${item.contentSnippet || item.description || ""}`;
-    return targetRegex.test(textToSearch);
+const hasTicker = (text) => {
+    const upperText = text.toUpperCase();
+    return TARGET_TICKERS.some(t => upperText.includes(t));
 };
 
 async function run() {
     try {
-        console.log("🚀 Запуск моніторингу (v3.2.8 - Full Text Mode)...");
+        console.log("🚀 Запуск моніторингу (Версія: 3.2 Stable)...");
         let allItems = [];
         let sourceStats = {};
 
         for (const feedSource of FEEDS) {
             try {
-                await new Promise(r => setTimeout(r, 2000));
                 const feed = await parser.parseURL(feedSource.url);
                 const items = feed.items.map(i => ({ ...i, sourceName: feedSource.name }));
                 allItems = allItems.concat(items);
@@ -50,18 +47,28 @@ async function run() {
         }
 
         const thirtyFiveMinsAgo = Date.now() - (35 * 60 * 1000);
-        
+        let passedBySource = { GoogleNews: 0, SEC: 0 };
+
         const filtered = allItems.filter(item => {
             const pubDate = new Date(item.pubDate || item.isoDate || 0).getTime();
-            return pubDate > thirtyFiveMinsAgo && hasTicker(item);
+            const isFresh = pubDate > thirtyFiveMinsAgo;
+            const isTarget = hasTicker(item.title + " " + (item.contentSnippet || ""));
+            
+            if (isFresh && isTarget) {
+                passedBySource[item.sourceName]++;
+                return true;
+            }
+            return false;
         });
 
         const uniqueItems = Array.from(new Map(filtered.map(item => [item.title, item])).values());
 
-        console.log(`\n📊 СТАТИСТИКА:`);
+        console.log(`\n📊 ДЕТАЛЬНА СТАТИСТИКА:`);
         console.log(`- Всього знайдено: ${allItems.length}`);
         Object.keys(sourceStats).forEach(s => console.log(`  [${s}]: ${sourceStats[s]} завантажено`));
-        console.log(`- Пройшли фільтр: ${uniqueItems.length}\n`);
+        console.log(`- Пройшли фільтр (35хв + Тікер):`);
+        Object.keys(passedBySource).forEach(s => console.log(`  [${s}]: ${passedBySource[s]} пройшло`));
+        console.log(`- Унікальних для ШІ: ${uniqueItems.length}\n`);
 
         if (uniqueItems.length === 0) {
             console.log("☕ Нових подій немає. Завершуємо.");
@@ -72,49 +79,38 @@ async function run() {
             console.log(`----------\nОбробка [${item.sourceName}]: ${item.title}`);
             
             let fullText = item.contentSnippet || item.description || "";
-            
-            // Повертаємо отримання повного тексту через Jina Reader
             if (item.sourceName === 'GoogleNews') {
                 try {
                     const res = await fetch(`https://r.jina.ai/${item.link}`, { signal: AbortSignal.timeout(15000) });
                     if (res.ok) {
                         const content = await res.text();
-                        // Очищуємо текст від зайвих пробілів та обрізаємо до розумного ліміту (8000 симв.)
-                        fullText = content.replace(/\s+/g, ' ').slice(0, 8000);
-                        console.log("✅ Повний текст отримано та очищено.");
+                        fullText = content.slice(0, 8000);
+                        console.log("✅ Повний текст отримано.");
                     }
-                } catch (e) { 
-                    console.log("⚠️ Не вдалося отримати повний текст, використовуємо сніпет."); 
-                }
+                } catch (e) { console.log("⚠️ Тільки сніпет (Таймаут або Помилка)."); }
             }
 
-            await new Promise(r => setTimeout(r, 6000));
+            await new Promise(r => setTimeout(r, 4000));
 
             const prompt = `Ти — Senior інвестиційний аналітик. Глибоко проаналізуй новину. 
-            Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} або ти вважаєш що вона неважлива — відповідай SKIP. Важливо збережи структуру шаблону
+            Якщо вона НЕ стосується тікерів: ${TARGET_TICKERS.join(', ')} — відповідай SKIP.
 
-            ВАЖЛИВО: Використовуй ТІЛЬКИ теги <b>, <i>, <a>, <code>. 
-            ЗАБОРОНЕНО використовувати <div>, <span>, <p>, <ul>, <li>.
-
-            КРОК 2: Сформуй звіт СУВОРО за шаблоном:
-            🎯 <b>Головне:</b> [Суть події новини, без зайвої води, але з точно зрозумілою суттю цієї новини і чого вона стосується]
-            
+            КРОК 2: Сформуй звіт (HTML, без Markdown):
+            🎯 <b>Головне:</b> [Суть події без води]
             🏢 <b>Компанії:</b> [#TICKER]
             📊 <b>Сентимент:</b> [🟢/🔴/🟡]
             🔥 <b>Важливість:</b> [1-10]/10
-            
-            🧠 <b>Аналіз:</b> [Аналіз від ШІ на що впливає данна новина]
-            📈 <b>Опціонний кут:</b> [IV та стратегія, простими словами для новачка в опціонах]
-            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів і як на них вплине]
+            🧠 <b>Аналіз:</b> [Вплив на ціну акції, логіка руху]
+            📈 <b>Опціонний кут:</b> [IV та стратегії: Iron Condor, Spreads тощо. Пиши простою мовою, як для новачка]
+            ⚔️ <b>Конкуренти:</b> [Тікери конкурентів та короткий вплив на них]
 
-            Дані:
-            Заголовок: ${item.title}
-            Текст новини: ${fullText}`;
+            Текст: ${item.title} \n ${fullText}`;
 
             let success = false;
             let attempts = 0;
+            const MAX_AI_ATTEMPTS = 3; // Збільшено до 3-х спроб
 
-            while (!success && attempts < 3) {
+            while (!success && attempts < MAX_AI_ATTEMPTS) {
                 try {
                     const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
                     
@@ -127,43 +123,33 @@ async function run() {
 
                     if (!response.includes("SKIP")) {
                         const message = `🔔 <b>Новина:</b> <a href="${item.link}">${item.title}</a>\n\n${response}`;
-                        
-                        const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ 
-                                chat_id: TELEGRAM_CHAT_ID, 
-                                text: message, 
-                                parse_mode: 'HTML', 
-                                disable_web_page_preview: true 
-                            })
+                            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
+                            signal: AbortSignal.timeout(10000)
                         });
-
-                        if (tgRes.ok) {
-                            console.log("📨 Надіслано.");
-                        } else {
-                            const errData = await tgRes.json();
-                            console.error(`❌ Помилка Telegram: ${errData.description}`);
-                        }
+                        console.log("📨 Надіслано в Telegram.");
                     } else {
-                        console.log("⏭️ AI SKIP.");
+                        console.log("⏭️ AI вирішив пропустити (SKIP).");
                     }
                     success = true;
                 } catch (err) {
                     attempts++;
                     if (err.message.includes("503") || err.message.includes("demand") || err.message === 'TIMEOUT') {
-                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/3). Чекаємо 15 сек...`);
+                        console.log(`⚠️ Помилка AI (Спроба ${attempts}/${MAX_AI_ATTEMPTS}). Чекаємо 15 сек...`);
                         await new Promise(r => setTimeout(r, 15000));
                     } else {
-                        console.error(`❌ Помилка: ${err.message}`);
+                        console.error("❌ Фатальна помилка AI:", err.message);
                         success = true; 
                     }
                 }
             }
         }
+        console.log("✅ Роботу завершено успішно.");
         process.exit(0);
     } catch (error) {
-        console.error("💥 Критична помилка:", error);
+        console.error("💥 Критична помилка виконання:", error);
         process.exit(1);
     }
 }
