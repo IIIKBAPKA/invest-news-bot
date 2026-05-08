@@ -107,7 +107,7 @@ async function run() {
             while (attempt < maxAttempts) {
                 try {
                     // Використовуємо 2.0-flash (актуальна модель з високими лімітами)
-                    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+                    const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
                     const result = await model.generateContent(prompt);
                     responseText = result.response.text().trim();
                     break;
