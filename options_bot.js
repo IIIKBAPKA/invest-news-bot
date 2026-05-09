@@ -10,17 +10,25 @@ if (yf.YahooFinance) {
     yahooFinance = new yf();
 }
 
-// 🥷 МАСКУВАННЯ ПІД БРАУЗЕР (ОБХІД БЛОКУВАННЯ YAHOO)
-yahooFinance.suppressNotices(['yahooSurvey', 'cookieAndCrumb']);
-yahooFinance.setGlobalConfig({
-    requestOptions: {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5'
-        }
+// 🥷 БЕЗПЕЧНЕ МАСКУВАННЯ ПІД БРАУЗЕР
+try {
+    if (typeof yahooFinance.suppressNotices === 'function') {
+        yahooFinance.suppressNotices(['yahooSurvey', 'cookieAndCrumb']);
     }
-});
+    if (typeof yahooFinance.setGlobalConfig === 'function') {
+        yahooFinance.setGlobalConfig({
+            requestOptions: {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5'
+                }
+            }
+        });
+    }
+} catch (e) {
+    console.log("⚠️ Маскування пропущено через специфіку версії бібліотеки, продовжуємо...");
+}
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -40,7 +48,7 @@ const formatMoney = (num) => {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runOptionsScanner() {
-    console.log("🔍 Запуск просунутого математичного сканера опціонів (з маскуванням)...");
+    console.log("🔍 Запуск просунутого математичного сканера опціонів...");
     
     let finalTelegramMessage = "🐋 <b>РАДАР АНОМАЛЬНИХ ОПЦІОНІВ</b> 🐋\n\n";
     let foundAnomalies = false;
@@ -50,7 +58,7 @@ async function runOptionsScanner() {
         
         let result = null;
         let attempts = 0;
-        const maxAttempts = 2; // Зменшив до 2 спроб, щоб швидше проходити, якщо IP в жорсткому бані
+        const maxAttempts = 2; // Якщо жорсткий бан, не мучимо сервер довго
 
         while (attempts < maxAttempts) {
             try {
@@ -101,6 +109,7 @@ async function runOptionsScanner() {
                         totalPutMoney += moneyFlow;
                     }
 
+                    // Аномалія: Об'єм у 3 рази більший за інтерес + великі гроші
                     if (volume > 500 && volume > (openInterest * 3) && moneyFlow > 10000) {
                         tickerAnomalies.push({
                             type: type,
@@ -147,7 +156,7 @@ async function runOptionsScanner() {
                 finalTelegramMessage += `\n`;
             }
 
-            // Пауза 5 секунд між компаніями, щоб імітувати повільну людину
+            // Пауза 5 секунд між компаніями, щоб імітувати повільну людину і не "злити" сервер
             await sleep(5000);
 
         } catch (error) {
