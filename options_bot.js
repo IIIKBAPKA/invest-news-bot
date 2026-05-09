@@ -1,6 +1,9 @@
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const MARKETDATA_TOKEN = process.env.MARKETDATA_TOKEN; 
+
+// Читаємо токен і ОДРАЗУ чистимо його від усіх можливих невидимих символів та переносів
+const rawToken = process.env.MARKETDATA_TOKEN || "";
+const MARKETDATA_TOKEN = rawToken.trim(); 
 
 const TARGET_COMPANIES = [
     "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
@@ -17,11 +20,14 @@ const formatMoney = (num) => {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runOptionsScanner() {
-    console.log("🔍 Запуск сканера опціонів (Жорсткі фільтри для Mega-Caps)...");
+    console.log("🔍 Запуск сканера опціонів (Жорсткі фільтри + Дебаг токена)...");
     
+    // Жорстка перевірка токена з логуванням
     if (!MARKETDATA_TOKEN) {
-        console.error("❌ ПОМИЛКА: Не знайдено MARKETDATA_TOKEN!");
+        console.error("❌ ПОМИЛКА: Не знайдено MARKETDATA_TOKEN! Перевір файл .yml та GitHub Secrets.");
         process.exit(1);
+    } else {
+        console.log(`🔑 Токен знайдено! Довжина: ${MARKETDATA_TOKEN.length} символів. Починається на: ${MARKETDATA_TOKEN.substring(0, 4)}...`);
     }
 
     let finalTelegramMessage = "🐋 <b>РАДАР ОБ'ЄМУ ОПЦІОНІВ</b> 🐋\n\n";
@@ -82,7 +88,7 @@ async function runOptionsScanner() {
                     totalPutMoney += moneyFlow;
                 }
 
-                // 🎯 НОВИЙ ФІЛЬТР ДЛЯ КИТІВ: Об'єм > 1000, в 4 рази більше за OI, грошей > $50k в один страйк
+                // 🎯 ФІЛЬТР ДЛЯ КИТІВ: Об'єм > 1000, в 4 рази більше за OI, грошей > $50k в один страйк
                 if (volume > 1000 && volume > (openInterest * 4) && moneyFlow > 50000) {
                     tickerAnomalies.push({
                         type: type,
@@ -98,10 +104,10 @@ async function runOptionsScanner() {
             const totalMoney = totalCallMoney + totalPutMoney;
             const moneyPCRatio = totalCallMoney > 0 ? (totalPutMoney / totalCallMoney) : 0;
             
-            // 💰 НОВИЙ ФІЛЬТР СУМИ: Сумарно в аномальні страйки влито > $250,000
+            // 💰 ФІЛЬТР СУМИ: Сумарно в аномальні страйки влито > $250,000
             const hasStrikeAnomaly = tickerAnomalies.length > 0 && tickerAnomalies.reduce((sum, a) => sum + a.money, 0) > 250000;
             
-            // 🌊 НОВИЙ ФІЛЬТР ЦУНАМІ: Загальний об'єм > 50,000 контрактів І грошовий перекіс більше 1 до 4
+            // 🌊 ФІЛЬТР ЦУНАМІ: Загальний об'єм > 50,000 контрактів І грошовий перекіс більше 1 до 4
             const hasDirectionalAnomaly = totalVolume > 50000 && (moneyPCRatio < 0.25 || moneyPCRatio > 4.0);
 
             if (hasStrikeAnomaly || hasDirectionalAnomaly) {
