@@ -40,12 +40,14 @@ async function runOptionsScanner() {
             const response = await fetch(`https://api.marketdata.app/v1/options/chain/${ticker}`, {
                 headers: {
                     'Authorization': `Bearer ${MARKETDATA_TOKEN}`,
-                    'Accept': 'application/json'
+                    'Accept': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
                 }
             });
             
             if (response.status === 429) {
-                console.log(`⚠️ MarketData: перевищено ліміт запитів. Чекаємо 5с...`);
+                const errorText = await response.text(); // Читаємо, ЩО САМЕ відповів сервер
+                console.log(`⚠️ MarketData (429): Відмова сервера. Причина: ${errorText}`);
                 await sleep(5000);
                 continue;
             }
