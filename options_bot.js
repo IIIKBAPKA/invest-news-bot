@@ -1,5 +1,6 @@
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const MARKETDATA_TOKEN = process.env.MARKETDATA_TOKEN; // Підтягуємо новий токен
 
 const TARGET_COMPANIES = [
     "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
@@ -18,6 +19,12 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function runOptionsScanner() {
     console.log("🔍 Запуск сканера опціонів (джерело: MarketData API)...");
     
+    // Перевірка чи додали токен
+    if (!MARKETDATA_TOKEN) {
+        console.error("❌ ПОМИЛКА: Не знайдено MARKETDATA_TOKEN! Додайте його в GitHub Secrets.");
+        process.exit(1);
+    }
+
     let finalTelegramMessage = "🐋 <b>РАДАР АНОМАЛЬНИХ ОПЦІОНІВ</b> 🐋\n\n";
     let foundAnomalies = false;
 
@@ -25,24 +32,27 @@ async function runOptionsScanner() {
         console.log(`Скануємо ${ticker}...`);
 
         try {
-            // Звертаємося до відкритого API без ключів
-            const response = await fetch(`https://api.marketdata.app/v1/options/chain/${ticker}`);
+            // Тепер ми відправляємо твій персональний ключ у заголовках (Headers)
+            const response = await fetch(`https://api.marketdata.app/v1/options/chain/${ticker}`, {
+                headers: {
+                    'Authorization': `Bearer ${MARKETDATA_TOKEN}`,
+                    'Accept': 'application/json'
+                }
+            });
             
             if (response.status === 429) {
-                console.log(`⚠️ MarketData: перевищено ліміт запитів. Переходимо до наступного...`);
+                console.log(`⚠️ MarketData: перевищено ліміт запитів. Чекаємо...`);
                 await sleep(5000);
                 continue;
             }
 
             const data = await response.json();
 
-            // Якщо сталася помилка на їхньому боці або немає даних
             if (data.s !== "ok") {
                 console.log(`⚠️ Немає даних для ${ticker}: ${data.errmsg || 'невідома помилка'}`);
                 continue;
             }
 
-            // MarketData повертає дати в Unix-секундах. Знаходимо найближчу дату (найменше число).
             const uniqueExpirations = [...new Set(data.expiration)].sort((a, b) => a - b);
             if (uniqueExpirations.length === 0) continue;
 
@@ -55,18 +65,16 @@ async function runOptionsScanner() {
             let totalCallMoney = 0;
             let totalPutMoney = 0;
 
-            // API віддає дані масивами, тому проходимось по індексах
             for (let i = 0; i < data.optionSymbol.length; i++) {
-                // Відкидаємо всі контракти, окрім тих, що на найближчу п'ятницю
                 if (data.expiration[i] !== nearestExp) continue;
 
-                const type = data.side[i].toUpperCase(); // "CALL" або "PUT"
+                const type = data.side[i].toUpperCase(); 
                 const volume = data.volume[i] || 0;
                 const openInterest = data.openInterest[i] || 0;
                 const lastPrice = data.last[i] || 0;
                 const strike = data.strike[i];
 
-                const moneyFlow = volume * lastPrice * 100; // 1 контракт = 100 акцій
+                const moneyFlow = volume * lastPrice * 100; 
 
                 if (type === "CALL") {
                     totalCallVol += volume;
@@ -76,7 +84,6 @@ async function runOptionsScanner() {
                     totalPutMoney += moneyFlow;
                 }
 
-                // УМОВА: Об'єм > 500, перевищує OI в 3 рази, і влито більше $10,000
                 if (volume > 500 && volume > (openInterest * 3) && moneyFlow > 10000) {
                     tickerAnomalies.push({
                         type: type,
@@ -118,8 +125,8 @@ async function runOptionsScanner() {
                 finalTelegramMessage += `\n`;
             }
 
-            // Пауза 2 секунди між компаніями
-            await sleep(2000);
+            // Щоб не спамити API (10 запитів на секунду - це максимум для безкоштовного тарифу)
+            await sleep(1500);
 
         } catch (error) {
             console.error(`❌ Помилка обробки ${ticker}:`, error.message);
