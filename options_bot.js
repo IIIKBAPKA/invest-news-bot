@@ -1,4 +1,14 @@
-const yahooFinance = require('yahoo-finance2').default;
+const yf = require('yahoo-finance2');
+
+// Бронебійна ініціалізація для обходу проблеми з версіями
+let yahooFinance;
+if (yf.YahooFinance) {
+    yahooFinance = new yf.YahooFinance(); 
+} else if (yf.default) {
+    yahooFinance = yf.default; 
+} else {
+    yahooFinance = new yf();
+}
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -15,6 +25,9 @@ const formatMoney = (num) => {
     return `$${num.toFixed(0)}`;
 };
 
+// Допоміжна функція для пауз
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function runOptionsScanner() {
     console.log("🔍 Запуск просунутого математичного сканера опціонів...");
     
@@ -23,9 +36,29 @@ async function runOptionsScanner() {
 
     for (const ticker of TARGET_COMPANIES) {
         console.log(`Скануємо ${ticker}...`);
+        
+        let result = null;
+        let attempts = 0;
+        const maxAttempts = 3;
+
+        // Блок із повторними спробами (Retry Logic) для захисту від бана
+        while (attempts < maxAttempts) {
+            try {
+                result = await yahooFinance.options(ticker);
+                break; // Якщо успішно - виходимо з циклу спроб
+            } catch (error) {
+                attempts++;
+                if (error.message.includes('Too Many Requests') || error.message.includes('Unexpected token')) {
+                    console.log(`⏳ Yahoo лімітує запити по ${ticker}. Чекаємо 15 секунд... (Спроба ${attempts}/${maxAttempts})`);
+                    await sleep(15000);
+                } else {
+                    console.error(`❌ Критична помилка ${ticker}:`, error.message);
+                    break;
+                }
+            }
+        }
+
         try {
-            const result = await yahooFinance.options(ticker);
-            
             if (!result || !result.options || result.options.length === 0) {
                 console.log(`⚠️ Немає даних по опціонах для ${ticker}`);
                 continue;
@@ -116,11 +149,11 @@ async function runOptionsScanner() {
                 finalTelegramMessage += `\n`;
             }
 
-            // Захист від бана по IP від Yahoo
-            await new Promise(r => setTimeout(r, 2000));
+            // Захист від бана по IP від Yahoo (4 секунди після успішного запиту)
+            await sleep(4000);
 
         } catch (error) {
-            console.error(`❌ Помилка ${ticker}:`, error.message);
+            console.error(`❌ Помилка обробки даних ${ticker}:`, error.message);
         }
     }
     
