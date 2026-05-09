@@ -1,6 +1,6 @@
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const MARKETDATA_TOKEN = process.env.MARKETDATA_TOKEN; // Підтягуємо новий токен
+const MARKETDATA_TOKEN = process.env.MARKETDATA_TOKEN; 
 
 const TARGET_COMPANIES = [
     "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
@@ -17,11 +17,10 @@ const formatMoney = (num) => {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runOptionsScanner() {
-    console.log("🔍 Запуск сканера опціонів (джерело: MarketData API)...");
+    console.log("🔍 Запуск сканера опціонів (Жорсткі фільтри для Mega-Caps)...");
     
-    // Перевірка чи додали токен
     if (!MARKETDATA_TOKEN) {
-        console.error("❌ ПОМИЛКА: Не знайдено MARKETDATA_TOKEN! Додайте його в GitHub Secrets.");
+        console.error("❌ ПОМИЛКА: Не знайдено MARKETDATA_TOKEN!");
         process.exit(1);
     }
 
@@ -32,7 +31,6 @@ async function runOptionsScanner() {
         console.log(`Скануємо ${ticker}...`);
 
         try {
-            // Тепер ми відправляємо твій персональний ключ у заголовках (Headers)
             const response = await fetch(`https://api.marketdata.app/v1/options/chain/${ticker}`, {
                 headers: {
                     'Authorization': `Bearer ${MARKETDATA_TOKEN}`,
@@ -41,7 +39,7 @@ async function runOptionsScanner() {
             });
             
             if (response.status === 429) {
-                console.log(`⚠️ MarketData: перевищено ліміт запитів. Чекаємо...`);
+                console.log(`⚠️ MarketData: перевищено ліміт запитів. Чекаємо 5с...`);
                 await sleep(5000);
                 continue;
             }
@@ -84,7 +82,8 @@ async function runOptionsScanner() {
                     totalPutMoney += moneyFlow;
                 }
 
-                if (volume > 500 && volume > (openInterest * 3) && moneyFlow > 10000) {
+                // 🎯 НОВИЙ ФІЛЬТР ДЛЯ КИТІВ: Об'єм > 1000, в 4 рази більше за OI, грошей > $50k в один страйк
+                if (volume > 1000 && volume > (openInterest * 4) && moneyFlow > 50000) {
                     tickerAnomalies.push({
                         type: type,
                         strike: strike,
@@ -99,8 +98,11 @@ async function runOptionsScanner() {
             const totalMoney = totalCallMoney + totalPutMoney;
             const moneyPCRatio = totalCallMoney > 0 ? (totalPutMoney / totalCallMoney) : 0;
             
-            const hasStrikeAnomaly = tickerAnomalies.length > 0 && tickerAnomalies.reduce((sum, a) => sum + a.money, 0) > 50000;
-            const hasDirectionalAnomaly = totalVolume > 10000 && (moneyPCRatio < 0.33 || moneyPCRatio > 3.0);
+            // 💰 НОВИЙ ФІЛЬТР СУМИ: Сумарно в аномальні страйки влито > $250,000
+            const hasStrikeAnomaly = tickerAnomalies.length > 0 && tickerAnomalies.reduce((sum, a) => sum + a.money, 0) > 250000;
+            
+            // 🌊 НОВИЙ ФІЛЬТР ЦУНАМІ: Загальний об'єм > 50,000 контрактів І грошовий перекіс більше 1 до 4
+            const hasDirectionalAnomaly = totalVolume > 50000 && (moneyPCRatio < 0.25 || moneyPCRatio > 4.0);
 
             if (hasStrikeAnomaly || hasDirectionalAnomaly) {
                 foundAnomalies = true;
@@ -112,11 +114,11 @@ async function runOptionsScanner() {
                 finalTelegramMessage += `💸 Загальний потік: ${formatMoney(totalMoney)} (Calls: ${formatMoney(totalCallMoney)} / Puts: ${formatMoney(totalPutMoney)})\n`;
                 
                 if (hasDirectionalAnomaly && !hasStrikeAnomaly) {
-                    finalTelegramMessage += `🌊 <i>Спрацював радар глобального перекосу (масовий рух в один бік).</i>\n`;
+                    finalTelegramMessage += `🌊 <i>Спрацював радар глобального перекосу (шалений об'єм в один бік).</i>\n`;
                 }
 
                 if (hasStrikeAnomaly) {
-                    finalTelegramMessage += `🎯 Точкові аномалії (Крупні угоди):\n`;
+                    finalTelegramMessage += `🎯 Точкові аномалії (Жирні кити):\n`;
                     tickerAnomalies.sort((a, b) => b.money - a.money).slice(0, 3).forEach(a => {
                         let icon = a.type === "CALL" ? "📈" : "📉";
                         finalTelegramMessage += `  ${icon} ${a.type} | Strike: $${a.strike} | Vol: ${a.volume} (OI: ${a.oi}) | ${formatMoney(a.money)}\n`;
@@ -125,7 +127,6 @@ async function runOptionsScanner() {
                 finalTelegramMessage += `\n`;
             }
 
-            // Щоб не спамити API (10 запитів на секунду - це максимум для безкоштовного тарифу)
             await sleep(1500);
 
         } catch (error) {
@@ -134,8 +135,13 @@ async function runOptionsScanner() {
     }
     
     if (foundAnomalies) {
+        // 🛠 Захист від ліміту символів у Telegram (максимум 4096)
+        if (finalTelegramMessage.length > 4000) {
+            finalTelegramMessage = finalTelegramMessage.substring(0, 4000) + "\n\n✂️ <i>Звіт обрізано через ліміт символів...</i>";
+        }
+
         try {
-            await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            const tgResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
@@ -145,12 +151,28 @@ async function runOptionsScanner() {
                     disable_web_page_preview: true
                 })
             });
-            console.log("📨 Звіт по опціонах успішно відправлено!");
+            
+            const tgResult = await tgResponse.json();
+
+            if (tgResult.ok) {
+                console.log("📨 Звіт по опціонах успішно відправлено!");
+            } else {
+                console.error("❌ Telegram відмовився приймати повідомлення:", tgResult.description);
+                // Відправляємо сирий текст, якщо HTML зламався
+                await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        chat_id: TELEGRAM_CHAT_ID, 
+                        text: "⚠️ Помилка форматування. Сирий звіт:\n\n" + finalTelegramMessage.replace(/<[^>]*>?/gm, '')
+                    })
+                });
+            }
         } catch (err) {
-            console.error("Помилка відправки в ТГ:", err);
+            console.error("Помилка мережі при відправці в ТГ:", err);
         }
     } else {
-        console.log("Крупних аномальних угод сьогодні не знайдено.");
+        console.log("Крупних аномальних угод сьогодні не знайдено. Ринок спокійний.");
     }
     
     process.exit(0);
