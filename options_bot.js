@@ -1,36 +1,3 @@
-const yf = require('yahoo-finance2');
-
-// Бронебійна ініціалізація
-let yahooFinance;
-if (yf.YahooFinance) {
-    yahooFinance = new yf.YahooFinance(); 
-} else if (yf.default) {
-    yahooFinance = yf.default; 
-} else {
-    yahooFinance = new yf();
-}
-
-// 🥷 БЕЗПЕЧНЕ МАСКУВАННЯ ПІД БРАУЗЕР (ВИПРАВЛЕНО)
-try {
-    if (typeof yahooFinance.suppressNotices === 'function') {
-        yahooFinance.suppressNotices(['yahooSurvey', 'cookieAndCrumb']);
-    }
-    if (typeof yahooFinance.setGlobalConfig === 'function') {
-        yahooFinance.setGlobalConfig({
-            fetchOptions: { // <--- Виправлено з requestOptions на fetchOptions
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5'
-                }
-            }
-        });
-        console.log("✅ Маскування під браузер успішно застосовано!");
-    }
-} catch (e) {
-    console.log("⚠️ Помилка маскування:", e.message);
-}
-
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
@@ -49,85 +16,80 @@ const formatMoney = (num) => {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runOptionsScanner() {
-    console.log("🔍 Запуск просунутого математичного сканера опціонів...");
+    console.log("🔍 Запуск сканера опціонів (джерело: MarketData API)...");
     
     let finalTelegramMessage = "🐋 <b>РАДАР АНОМАЛЬНИХ ОПЦІОНІВ</b> 🐋\n\n";
     let foundAnomalies = false;
 
     for (const ticker of TARGET_COMPANIES) {
         console.log(`Скануємо ${ticker}...`);
-        
-        let result = null;
-        let attempts = 0;
-        const maxAttempts = 2; 
-
-        while (attempts < maxAttempts) {
-            try {
-                result = await yahooFinance.options(ticker);
-                break; 
-            } catch (error) {
-                attempts++;
-                if (error.message.includes('Too Many Requests') || error.message.includes('Unexpected token')) {
-                    console.log(`⏳ Yahoo підозрює бота по ${ticker}. Чекаємо 10 секунд... (Спроба ${attempts}/${maxAttempts})`);
-                    await sleep(10000);
-                } else {
-                    console.error(`❌ Помилка ${ticker}:`, error.message);
-                    break;
-                }
-            }
-        }
 
         try {
-            if (!result || !result.options || result.options.length === 0) {
-                console.log(`⚠️ Немає даних або блокування по ${ticker}`);
+            // Звертаємося до відкритого API без ключів
+            const response = await fetch(`https://api.marketdata.app/v1/options/chain/${ticker}`);
+            
+            if (response.status === 429) {
+                console.log(`⚠️ MarketData: перевищено ліміт запитів. Переходимо до наступного...`);
+                await sleep(5000);
                 continue;
             }
-            
-            const nearestExpiration = result.options[0]; 
-            const expDate = new Date(nearestExpiration.expirationDate).toISOString().split('T')[0];
 
-            let tickerAnomalies = []; 
+            const data = await response.json();
+
+            // Якщо сталася помилка на їхньому боці або немає даних
+            if (data.s !== "ok") {
+                console.log(`⚠️ Немає даних для ${ticker}: ${data.errmsg || 'невідома помилка'}`);
+                continue;
+            }
+
+            // MarketData повертає дати в Unix-секундах. Знаходимо найближчу дату (найменше число).
+            const uniqueExpirations = [...new Set(data.expiration)].sort((a, b) => a - b);
+            if (uniqueExpirations.length === 0) continue;
+
+            const nearestExp = uniqueExpirations[0];
+            const expDate = new Date(nearestExp * 1000).toISOString().split('T')[0];
+
+            let tickerAnomalies = [];
             let totalCallVol = 0;
             let totalPutVol = 0;
             let totalCallMoney = 0;
             let totalPutMoney = 0;
 
-            const analyzeContracts = (contracts, type) => {
-                if (!contracts) return;
-                
-                contracts.forEach(contract => {
-                    const volume = contract.volume || 0;
-                    const openInterest = contract.openInterest || 0;
-                    const lastPrice = contract.lastPrice || 0;
-                    
-                    const moneyFlow = volume * lastPrice * 100; 
+            // API віддає дані масивами, тому проходимось по індексах
+            for (let i = 0; i < data.optionSymbol.length; i++) {
+                // Відкидаємо всі контракти, окрім тих, що на найближчу п'ятницю
+                if (data.expiration[i] !== nearestExp) continue;
 
-                    if (type === "CALL") {
-                        totalCallVol += volume;
-                        totalCallMoney += moneyFlow;
-                    } else {
-                        totalPutVol += volume;
-                        totalPutMoney += moneyFlow;
-                    }
+                const type = data.side[i].toUpperCase(); // "CALL" або "PUT"
+                const volume = data.volume[i] || 0;
+                const openInterest = data.openInterest[i] || 0;
+                const lastPrice = data.last[i] || 0;
+                const strike = data.strike[i];
 
-                    if (volume > 500 && volume > (openInterest * 3) && moneyFlow > 10000) {
-                        tickerAnomalies.push({
-                            type: type,
-                            strike: contract.strike,
-                            volume: volume,
-                            oi: openInterest,
-                            money: moneyFlow
-                        });
-                    }
-                });
-            };
+                const moneyFlow = volume * lastPrice * 100; // 1 контракт = 100 акцій
 
-            analyzeContracts(nearestExpiration.calls, "CALL");
-            analyzeContracts(nearestExpiration.puts, "PUT");
+                if (type === "CALL") {
+                    totalCallVol += volume;
+                    totalCallMoney += moneyFlow;
+                } else {
+                    totalPutVol += volume;
+                    totalPutMoney += moneyFlow;
+                }
+
+                // УМОВА: Об'єм > 500, перевищує OI в 3 рази, і влито більше $10,000
+                if (volume > 500 && volume > (openInterest * 3) && moneyFlow > 10000) {
+                    tickerAnomalies.push({
+                        type: type,
+                        strike: strike,
+                        volume: volume,
+                        oi: openInterest,
+                        money: moneyFlow
+                    });
+                }
+            }
 
             const totalVolume = totalCallVol + totalPutVol;
             const totalMoney = totalCallMoney + totalPutMoney;
-            
             const moneyPCRatio = totalCallMoney > 0 ? (totalPutMoney / totalCallMoney) : 0;
             
             const hasStrikeAnomaly = tickerAnomalies.length > 0 && tickerAnomalies.reduce((sum, a) => sum + a.money, 0) > 50000;
@@ -138,7 +100,7 @@ async function runOptionsScanner() {
                 
                 let sentiment = moneyPCRatio < 0.5 ? "🟢 Бичачий (Скупляють Calls)" : (moneyPCRatio > 2.0 ? "🔴 Ведмежий (Скупляють Puts)" : "🟡 Змішаний");
 
-                finalTelegramMessage += `🏢 <b><a href="https://finance.yahoo.com/quote/${ticker}/options">${ticker}</a></b> (Експірація: ${expDate})\n`;
+                finalTelegramMessage += `🏢 <b>${ticker}</b> (Експірація: ${expDate})\n`;
                 finalTelegramMessage += `📊 Настрій грошей: ${sentiment}\n`;
                 finalTelegramMessage += `💸 Загальний потік: ${formatMoney(totalMoney)} (Calls: ${formatMoney(totalCallMoney)} / Puts: ${formatMoney(totalPutMoney)})\n`;
                 
@@ -156,11 +118,11 @@ async function runOptionsScanner() {
                 finalTelegramMessage += `\n`;
             }
 
-            // Пауза 5 секунд між компаніями
-            await sleep(5000);
+            // Пауза 2 секунди між компаніями
+            await sleep(2000);
 
         } catch (error) {
-            console.error(`❌ Помилка обробки даних ${ticker}:`, error.message);
+            console.error(`❌ Помилка обробки ${ticker}:`, error.message);
         }
     }
     
