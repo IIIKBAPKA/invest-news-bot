@@ -1,14 +1,4 @@
-const yf = require('yahoo-finance2');
-
-// Бронебійна ініціалізація для обходу проблеми з версіями (v2 -> v3)
-let yahooFinance;
-if (yf.YahooFinance) {
-    yahooFinance = new yf.YahooFinance(); // Для нової версії v3
-} else if (yf.default) {
-    yahooFinance = yf.default; // Для старої версії v2
-} else {
-    yahooFinance = new yf(); // Резервний варіант
-}
+const yahooFinance = require('yahoo-finance2').default;
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -34,7 +24,6 @@ async function runOptionsScanner() {
     for (const ticker of TARGET_COMPANIES) {
         console.log(`Скануємо ${ticker}...`);
         try {
-            // Одразу беремо ланцюг опціонів, минаючи проблемний quoteSummary
             const result = await yahooFinance.options(ticker);
             
             if (!result || !result.options || result.options.length === 0) {
@@ -46,7 +35,7 @@ async function runOptionsScanner() {
             const nearestExpiration = result.options[0]; 
             const expDate = new Date(nearestExpiration.expirationDate).toISOString().split('T')[0];
 
-            let tickerAnomalies = []; // Для точкових страйків
+            let tickerAnomalies = []; 
             
             // Глобальна статистика по тикеру за день
             let totalCallVol = 0;
@@ -96,10 +85,10 @@ async function runOptionsScanner() {
             const moneyPCRatio = totalCallMoney > 0 ? (totalPutMoney / totalCallMoney) : 0;
             
             // УМОВИ ДЛЯ ВІДПРАВКИ АЛЕРТУ:
-            // 1. Є конкретні жирні аномалії на суму > $50k
+            // 1. Є конкретні жирні аномалії на суму > $50k (Точковий кит)
             const hasStrikeAnomaly = tickerAnomalies.length > 0 && tickerAnomalies.reduce((sum, a) => sum + a.money, 0) > 50000;
             
-            // 2. АБО є глобальний перекіс (об'єм більше 10k контрактів І грошей влито в 3 рази більше в один бік)
+            // 2. АБО є глобальний перекіс (Цунамі): об'єм більше 10k контрактів І грошей влито в 3 рази більше в один бік
             const hasDirectionalAnomaly = totalVolume > 10000 && (moneyPCRatio < 0.33 || moneyPCRatio > 3.0);
 
             if (hasStrikeAnomaly || hasDirectionalAnomaly) {
