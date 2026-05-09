@@ -25,4 +25,5 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MARKETDATA_TOKEN: ${{ secrets.MARKETDATA_TOKEN }}
         run: node options_bot.js
