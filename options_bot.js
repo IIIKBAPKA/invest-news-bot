@@ -10,14 +10,14 @@ if (yf.YahooFinance) {
     yahooFinance = new yf();
 }
 
-// 🥷 БЕЗПЕЧНЕ МАСКУВАННЯ ПІД БРАУЗЕР
+// 🥷 БЕЗПЕЧНЕ МАСКУВАННЯ ПІД БРАУЗЕР (ВИПРАВЛЕНО)
 try {
     if (typeof yahooFinance.suppressNotices === 'function') {
         yahooFinance.suppressNotices(['yahooSurvey', 'cookieAndCrumb']);
     }
     if (typeof yahooFinance.setGlobalConfig === 'function') {
         yahooFinance.setGlobalConfig({
-            requestOptions: {
+            fetchOptions: { // <--- Виправлено з requestOptions на fetchOptions
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -25,9 +25,10 @@ try {
                 }
             }
         });
+        console.log("✅ Маскування під браузер успішно застосовано!");
     }
 } catch (e) {
-    console.log("⚠️ Маскування пропущено через специфіку версії бібліотеки, продовжуємо...");
+    console.log("⚠️ Помилка маскування:", e.message);
 }
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
@@ -58,7 +59,7 @@ async function runOptionsScanner() {
         
         let result = null;
         let attempts = 0;
-        const maxAttempts = 2; // Якщо жорсткий бан, не мучимо сервер довго
+        const maxAttempts = 2; 
 
         while (attempts < maxAttempts) {
             try {
@@ -109,7 +110,6 @@ async function runOptionsScanner() {
                         totalPutMoney += moneyFlow;
                     }
 
-                    // Аномалія: Об'єм у 3 рази більший за інтерес + великі гроші
                     if (volume > 500 && volume > (openInterest * 3) && moneyFlow > 10000) {
                         tickerAnomalies.push({
                             type: type,
@@ -156,7 +156,7 @@ async function runOptionsScanner() {
                 finalTelegramMessage += `\n`;
             }
 
-            // Пауза 5 секунд між компаніями, щоб імітувати повільну людину і не "злити" сервер
+            // Пауза 5 секунд між компаніями
             await sleep(5000);
 
         } catch (error) {
