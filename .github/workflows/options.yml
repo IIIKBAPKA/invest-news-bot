@@ -19,7 +19,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install yahoo-finance2
+        run: npm install yahoo-finance2@2.11.3
 
       - name: Run Options Scanner
         env:
