@@ -1,4 +1,14 @@
-const yahooFinance = require('yahoo-finance2').default || require('yahoo-finance2');
+const yf = require('yahoo-finance2');
+
+// Бронебійна ініціалізація для обходу проблеми з версіями (v2 -> v3)
+let yahooFinance;
+if (yf.YahooFinance) {
+    yahooFinance = new yf.YahooFinance(); // Для нової версії v3
+} else if (yf.default) {
+    yahooFinance = yf.default; // Для старої версії v2
+} else {
+    yahooFinance = new yf(); // Резервний варіант
+}
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
