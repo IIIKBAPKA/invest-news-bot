@@ -24,7 +24,7 @@ async function runOptionsScanner() {
         process.exit(1);
     }
 
-    let finalTelegramMessage = "🐋 <b>РАДАР АНОМАЛЬНИХ ОПЦІОНІВ</b> 🐋\n\n";
+    let finalTelegramMessage = "🐋 <b>РАДАР ОБ'ЄМУ ОПЦІОНІВ</b> 🐋\n\n";
     let foundAnomalies = false;
 
     for (const ticker of TARGET_COMPANIES) {
