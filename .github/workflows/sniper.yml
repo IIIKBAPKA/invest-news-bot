@@ -1,0 +1,27 @@
+name: Washington Sniper Radar
+
+on:
+  workflow_dispatch: # Дозволяє запускати скрипт кнопкою з інтерфейсу GitHub
+  repository_dispatch:
+    types: [trigger-sniper] # Дозволяє запускати скрипт зовнішнім запитом (через твій cronjobs)
+
+jobs:
+  run-sniper-bot:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Run Sniper Script
+        env:
+          # Передаємо ключі з GitHub Secrets
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FMP_TOKEN: ${{ secrets.FMP_TOKEN }}
+        run: node sniper_finder.js
