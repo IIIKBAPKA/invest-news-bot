@@ -5,9 +5,9 @@ const rawToken = process.env.MARKETDATA_TOKEN || "";
 const MARKETDATA_TOKEN = rawToken.trim(); 
 
 const TARGET_COMPANIES = [
-    "NVDA", "GOOG", "VST", "AAPL", "TSLA", "DASH", "NEE", "UBER", 
-    "CVX", "XOM", "ADBE", "AMZN", "KO", "MSFT", "NFLX", "META", 
-    "AMD", "SPY", "QQQ"
+    "NVDA", "GOOG", "NFLX", "VST", "NEE", "UBER", 
+    "CVX", "XOM", "ADBE", "AMZN", "KO", "MSFT", "NFLX", 
+    "AMD", "SPY"
 ];
 
 const formatMoney = (num) => {
@@ -19,7 +19,7 @@ const formatMoney = (num) => {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runOptionsScanner() {
-    console.log("🔍 Запуск сканера опціонів (Оптимізований UI)...");
+    console.log("🔍 Запуск сканера опціонів (Снайперський режим - тільки мега-кити)...");
     
     if (!MARKETDATA_TOKEN) {
         console.error("❌ ПОМИЛКА: Не знайдено MARKETDATA_TOKEN!");
@@ -28,7 +28,7 @@ async function runOptionsScanner() {
         console.log(`🔑 Токен знайдено! Довжина: ${MARKETDATA_TOKEN.length} символів.`);
     }
 
-    let finalTelegramMessage = "🐋 <b>РАДАР ОБ'ЄМУ ОПЦІОНІВ</b> 🐋\n\n";
+    let finalTelegramMessage = "🐋 <b>РАДАР МЕГА-КИТІВ</b> 🐋\n\n";
     let foundAnomalies = false;
 
     for (const ticker of TARGET_COMPANIES) {
@@ -90,8 +90,9 @@ async function runOptionsScanner() {
             const totalMoney = totalCallMoney + totalPutMoney;
             const moneyPCRatio = totalCallMoney > 0 ? (totalPutMoney / totalCallMoney) : 0;
 
-            const dynamicMoneyThreshold = Math.max(50000, totalMoney * 0.015); 
-            const dynamicVolThreshold = Math.max(500, totalVolume * 0.01);
+            // 🎯 СНАЙПЕРСЬКІ ПОРОГИ: 2% від денного потоку (мінімум $100k) та 2% об'єму (мінімум 1000)
+            const dynamicMoneyThreshold = Math.max(100000, totalMoney * 0.02); 
+            const dynamicVolThreshold = Math.max(1000, totalVolume * 0.02);
 
             let tickerAnomalies = [];
 
@@ -100,7 +101,8 @@ async function runOptionsScanner() {
                 const openInterest = data.openInterest[i] || 0;
                 const moneyFlow = volume * (data.last[i] || 0) * 100; 
 
-                if (volume > dynamicVolThreshold && volume > (openInterest * 4) && moneyFlow > dynamicMoneyThreshold) {
+                // ЖОРСТКА УМОВА: Об'єм перекриває OI в 5 разів + проходить динамічні фільтри
+                if (volume >= dynamicVolThreshold && volume >= (openInterest * 5) && moneyFlow >= dynamicMoneyThreshold) {
                     tickerAnomalies.push({
                         type: data.side[i].toUpperCase(),
                         strike: data.strike[i],
@@ -111,11 +113,13 @@ async function runOptionsScanner() {
                 }
             }
             
+            // ЖОРСТКИЙ БАР'ЄР ВІДПРАВКИ: Аномалії сумарно > $500k ТА більше 4% від усього денного потоку
             const sumOfAnomalies = tickerAnomalies.reduce((sum, a) => sum + a.money, 0);
-            const hasStrikeAnomaly = tickerAnomalies.length > 0 && sumOfAnomalies > Math.max(250000, totalMoney * 0.03);
-            const hasDirectionalAnomaly = totalVolume > 50000 && (moneyPCRatio < 0.25 || moneyPCRatio > 4.0);
+            const hasStrikeAnomaly = tickerAnomalies.length > 0 && sumOfAnomalies >= Math.max(500000, totalMoney * 0.04);
+            
+            // ЦУНАМІ: Тільки якщо грошей > $50M і перекіс більше ніж 5 до 1
+            const hasDirectionalAnomaly = totalMoney >= 50000000 && (moneyPCRatio <= 0.20 || moneyPCRatio >= 5.0);
 
-            // ФОРМУВАННЯ КОМПАКТНОГО ПОВІДОМЛЕННЯ
             if (hasStrikeAnomaly || hasDirectionalAnomaly) {
                 foundAnomalies = true;
                 
@@ -125,14 +129,14 @@ async function runOptionsScanner() {
                 finalTelegramMessage += `⚖️ Ринок: ${sentiment} | Потік: ${formatMoney(totalMoney)} (C: ${formatMoney(totalCallMoney)} / P: ${formatMoney(totalPutMoney)})\n`;
                 
                 if (hasDirectionalAnomaly && !hasStrikeAnomaly) {
-                    finalTelegramMessage += `🌊 <b>Цунамі:</b> Аномальний перекіс об'єму в один бік!\n`;
+                    finalTelegramMessage += `🌊 <b>Екстремальний перекіс:</b> Масовий рух в один бік!\n`;
                 }
 
                 if (hasStrikeAnomaly) {
                     finalTelegramMessage += `🎯 <b>Аномальні страйки:</b>\n`;
                     tickerAnomalies.sort((a, b) => b.money - a.money).slice(0, 3).forEach(a => {
                         let icon = a.type === "CALL" ? "📈" : "📉";
-                        let excess = a.oi > 0 ? (a.volume / a.oi).toFixed(1) : a.volume; // Рахуємо мультиплікатор
+                        let excess = a.oi > 0 ? (a.volume / a.oi).toFixed(1) : a.volume; 
                         
                         finalTelegramMessage += `└ ${icon} <b>${a.type} $${a.strike}</b> | Влито: <b>${formatMoney(a.money)}</b> | Vol: ${a.volume} (OI перевищено в <b>${excess}x</b>)\n`;
                     });
