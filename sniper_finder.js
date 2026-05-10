@@ -22,8 +22,8 @@ async function getInsiderBuys() {
         data.forEach(trade => {
             const tradeValue = trade.securitiesTransacted * trade.price;
             
-            // Беремо тільки солідні угоди (від $50,000) і тільки від ТОП-менеджменту
-            if (tradeValue >= 50000 && !trade.typeOfOwner.includes("10% owner")) {
+            // Беремо тільки солідні угоди (від $100,000) і тільки від ТОП-менеджменту
+            if (tradeValue >= 100000 && !trade.typeOfOwner.includes("10% owner")) {
                 if (!insiderData[trade.symbol]) insiderData[trade.symbol] = [];
                 
                 insiderData[trade.symbol].push({
