@@ -20,7 +20,9 @@ const formatMoney = (num) => {
 
 async function getInsiderBuys() {
     console.log("🕵️ Завантажуємо покупки інсайдерів (Ліміт: 5000)...");
-    const url = `https://financialmodelingprep.com/api/v4/insider-trading?transactionType=P-Purchase&limit=5000&apikey=${FMP_TOKEN}`;
+    
+    // 🔧 ФІКС: Використовуємо новий формат /stable/ замість застарілого /api/v4/
+    const url = `https://financialmodelingprep.com/stable/insider-trading?transactionType=P-Purchase&limit=5000&apikey=${FMP_TOKEN}`;
     
     try {
         const response = await fetch(url);
@@ -32,7 +34,6 @@ async function getInsiderBuys() {
             data.forEach(trade => {
                 const tradeValue = trade.securitiesTransacted * trade.price;
                 
-                // Беремо тільки солідні угоди (від $100,000) і відсікаємо фонди
                 if (tradeValue >= 100000 && !trade.typeOfOwner.includes("10% owner")) {
                     if (!insiderData[trade.symbol]) insiderData[trade.symbol] = [];
                     
@@ -45,7 +46,7 @@ async function getInsiderBuys() {
                 }
             });
         } else {
-            console.error("⚠️ Відповідь API інсайдерів не є масивом. Можливо помилка токена:", data);
+            console.error("⚠️ Відповідь API інсайдерів не є масивом. Текст від сервера:", JSON.stringify(data, null, 2));
         }
         return insiderData;
     } catch (err) {
@@ -58,15 +59,24 @@ async function getPoliticalBuys() {
     console.log("🏛 Завантажуємо покупки політиків (Сенат та Палата представників)...");
     
     try {
+        // 🔧 ФІКС: Оновлено URL на /stable/
         const [senateRes, houseRes] = await Promise.all([
-            fetch(`https://financialmodelingprep.com/api/v4/senate-trading?limit=500&apikey=${FMP_TOKEN}`),
-            fetch(`https://financialmodelingprep.com/api/v4/senate-disclosure?limit=500&apikey=${FMP_TOKEN}`) 
+            fetch(`https://financialmodelingprep.com/stable/senate-trading?limit=500&apikey=${FMP_TOKEN}`),
+            fetch(`https://financialmodelingprep.com/stable/senate-disclosure?limit=500&apikey=${FMP_TOKEN}`) 
         ]);
         
         const senateData = await senateRes.json();
         const houseData = await houseRes.json();
         
         let politicalData = {};
+        
+        // Додаємо жорстку перевірку на помилки від сервера
+        if (!Array.isArray(senateData) && senateData['Error Message']) {
+             console.error("⚠️ Помилка API Сенату:", senateData['Error Message']);
+        }
+        if (!Array.isArray(houseData) && houseData['Error Message']) {
+             console.error("⚠️ Помилка API Палати:", houseData['Error Message']);
+        }
         
         const processPoliticalData = (dataArray) => {
             if (Array.isArray(dataArray)) {
@@ -101,11 +111,11 @@ async function runSniper() {
         const insiders = await getInsiderBuys();
         const politicians = await getPoliticalBuys();
         
-        // --- ДЕБАГ БЛОК ---
         const insiderTickers = Object.keys(insiders);
         const polTickers = Object.keys(politicians);
+        
         console.log(`\n📊 ДЕБАГ СТАТИСТИКА:`);
-        console.log(`👔 Унікальних компаній, де купували інсайдери: ${insiderTickers.length}`);
+        console.log(`👔 Унікальних компаній, де купували інсайдери (від $100k): ${insiderTickers.length}`);
         if (insiderTickers.length > 0) console.log(`👉 Приклади: ${insiderTickers.slice(0, 5).join(', ')}...`);
         console.log(`🏛 Унікальних компаній, де купували політики: ${polTickers.length}`);
         if (polTickers.length > 0) console.log(`👉 Приклади: ${polTickers.slice(0, 5).join(', ')}...`);
