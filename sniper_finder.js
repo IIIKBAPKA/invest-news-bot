@@ -1,14 +1,12 @@
-console.log("🚀 Скрипт успішно стартував! Ініціалізація...");
+console.log("🚀 Запуск 'Вашингтонського Снайпера' (Глобальне сканування ринку)...");
 
 const FMP_TOKEN = (process.env.FMP_TOKEN || "").trim();
 const TELEGRAM_TOKEN = (process.env.TELEGRAM_TOKEN || "").trim();
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
 
 if (!FMP_TOKEN) {
-    console.error("❌ ПОМИЛКА: Не знайдено FMP_TOKEN у секретах GitHub!");
+    console.error("❌ ПОМИЛКА: Не знайдено FMP_TOKEN!");
     process.exit(1);
-} else {
-    console.log(`🔑 FMP Токен знайдено (Довжина: ${FMP_TOKEN.length} симв.)`);
 }
 
 const formatMoney = (num) => {
@@ -18,140 +16,123 @@ const formatMoney = (num) => {
     return `$${num.toFixed(0)}`;
 };
 
-async function getInsiderBuys() {
-    console.log("🕵️ Завантажуємо покупки інсайдерів (Ліміт: 5000)...");
-    
-    // 🔧 ФІКС: Використовуємо новий формат /stable/ замість застарілого /api/v4/
-    const url = `https://financialmodelingprep.com/stable/insider-trading?transactionType=P-Purchase&limit=5000&apikey=${FMP_TOKEN}`;
-    
+// 1. Отримуємо дані Сенату з відкритого джерела (Без лімітів)
+async function getSenateMarketWide() {
+    console.log("🏛 Завантажуємо глобальну базу Сенату (Open Source)...");
     try {
-        const response = await fetch(url);
-        const data = await response.json();
+        const res = await fetch("https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json");
+        const data = await res.json();
         
-        let insiderData = {}; 
+        let recentBuys = {};
+        const sixtyDaysAgo = new Date();
+        sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60); // Беремо покупки за останні 60 днів
+
+        data.forEach(trade => {
+            if (trade.type && trade.type.toLowerCase().includes('purchase') && trade.ticker && trade.ticker !== "N/A") {
+                const tradeDate = new Date(trade.transaction_date);
+                if (tradeDate >= sixtyDaysAgo) {
+                    const cleanTicker = trade.ticker.replace(/<[^>]*>?/gm, '').trim(); // Чистимо від можливого HTML
+                    if (!recentBuys[cleanTicker]) recentBuys[cleanTicker] = [];
+                    
+                    recentBuys[cleanTicker].push({
+                        name: trade.senator || trade.representative || "Сенатор",
+                        amount: trade.amount,
+                        date: trade.transaction_date
+                    });
+                }
+            }
+        });
+        return recentBuys;
+    } catch (err) {
+        console.error("❌ Помилка завантаження бази Сенату:", err.message);
+        return {};
+    }
+}
+
+// 2. Точкова перевірка інсайдерів через FMP
+async function checkInsiderTarget(ticker) {
+    try {
+        const res = await fetch(`https://financialmodelingprep.com/stable/insider-trading?symbol=${ticker}&transactionType=P-Purchase&limit=100&apikey=${FMP_TOKEN}`);
+        const data = await res.json();
         
+        let insiders = [];
         if (Array.isArray(data)) {
             data.forEach(trade => {
                 const tradeValue = trade.securitiesTransacted * trade.price;
-                
+                // Фільтр: від $100k, виключаємо фонди
                 if (tradeValue >= 100000 && !trade.typeOfOwner.includes("10% owner")) {
-                    if (!insiderData[trade.symbol]) insiderData[trade.symbol] = [];
-                    
-                    insiderData[trade.symbol].push({
+                    insiders.push({
                         name: trade.reportingName,
-                        title: trade.typeOfOwner, 
+                        title: trade.typeOfOwner,
                         amount: tradeValue,
                         date: trade.transactionDate
                     });
                 }
             });
-        } else {
-            console.error("⚠️ Відповідь API інсайдерів не є масивом. Текст від сервера:", JSON.stringify(data, null, 2));
         }
-        return insiderData;
+        return insiders;
     } catch (err) {
-        console.error("❌ Помилка fetch інсайдерів:", err);
-        return {};
+        return [];
     }
 }
 
-async function getPoliticalBuys() {
-    console.log("🏛 Завантажуємо покупки політиків (Сенат та Палата представників)...");
-    
+async function runGlobalSniper() {
     try {
-        // 🔧 ФІКС: Оновлено URL на /stable/
-        const [senateRes, houseRes] = await Promise.all([
-            fetch(`https://financialmodelingprep.com/stable/senate-trading?limit=500&apikey=${FMP_TOKEN}`),
-            fetch(`https://financialmodelingprep.com/stable/senate-disclosure?limit=500&apikey=${FMP_TOKEN}`) 
-        ]);
+        // КРОК 1: Збираємо всі політичні покупки по всьому ринку
+        const politicalBuys = await getSenateMarketWide();
+        const globalTickers = Object.keys(politicalBuys);
         
-        const senateData = await senateRes.json();
-        const houseData = await houseRes.json();
-        
-        let politicalData = {};
-        
-        // Додаємо жорстку перевірку на помилки від сервера
-        if (!Array.isArray(senateData) && senateData['Error Message']) {
-             console.error("⚠️ Помилка API Сенату:", senateData['Error Message']);
-        }
-        if (!Array.isArray(houseData) && houseData['Error Message']) {
-             console.error("⚠️ Помилка API Палати:", houseData['Error Message']);
-        }
-        
-        const processPoliticalData = (dataArray) => {
-            if (Array.isArray(dataArray)) {
-                dataArray.forEach(trade => {
-                    if (trade.type && trade.type.toLowerCase().includes('purchase')) {
-                        if (!politicalData[trade.symbol]) politicalData[trade.symbol] = [];
-                        
-                        politicalData[trade.symbol].push({
-                            name: trade.representative || trade.firstName + ' ' + trade.lastName,
-                            amount: trade.amount,
-                            date: trade.transactionDate
-                        });
-                    }
-                });
-            }
-        };
-
-        processPoliticalData(senateData);
-        processPoliticalData(houseData);
-        
-        return politicalData;
-    } catch (err) {
-         console.error("❌ Помилка fetch політиків:", err);
-         return {};
-    }
-}
-
-async function runSniper() {
-    console.log("🎯 Аналізуємо бази даних...");
-    
-    try {
-        const insiders = await getInsiderBuys();
-        const politicians = await getPoliticalBuys();
-        
-        const insiderTickers = Object.keys(insiders);
-        const polTickers = Object.keys(politicians);
-        
-        console.log(`\n📊 ДЕБАГ СТАТИСТИКА:`);
-        console.log(`👔 Унікальних компаній, де купували інсайдери (від $100k): ${insiderTickers.length}`);
-        if (insiderTickers.length > 0) console.log(`👉 Приклади: ${insiderTickers.slice(0, 5).join(', ')}...`);
-        console.log(`🏛 Унікальних компаній, де купували політики: ${polTickers.length}`);
-        if (polTickers.length > 0) console.log(`👉 Приклади: ${polTickers.slice(0, 5).join(', ')}...`);
+        console.log(`\n📊 РЕЗУЛЬТАТ СИТА:`);
+        console.log(`🏛 Знайдено компаній, які купували політики за ост. 60 днів: ${globalTickers.length}`);
+        if (globalTickers.length > 0) console.log(`👉 Перевіряємо інсайдерів для: ${globalTickers.join(', ')}`);
         console.log(`-------------------------\n`);
-        
+
+        if (globalTickers.length === 0) {
+            console.log("Немає політичних покупок для перевірки. Завершуємо.");
+            return;
+        }
+
+        let message = "🎯 <b>СНАЙПЕР: ГЛОБАЛЬНЕ ЗЛИТТЯ ГРОШЕЙ</b> 🎯\n\n";
         let foundMatches = false;
-        let message = "🎯 <b>СНАЙПЕР: ЗЛИТТЯ ГРОШЕЙ</b> 🎯\n\n";
-        
-        for (const ticker in politicians) {
-            if (insiders[ticker]) {
+
+        // КРОК 2: Перевіряємо кожен знайдений тікер на наявність інсайдерів
+        for (const ticker of globalTickers) {
+            // Фільтруємо сміттєві тікери
+            if (ticker.length > 5 || ticker.includes(' ')) continue; 
+
+            const insiders = await checkInsiderTarget(ticker);
+            
+            if (insiders.length > 0) {
                 foundMatches = true;
+                console.log(`🔥 Знайдено глобальний збіг для ${ticker}!`);
+                
                 message += `🔥 <b>${ticker}</b>\n`;
                 
                 message += `🏛 <b>Політики:</b>\n`;
-                politicians[ticker].forEach(p => {
+                politicalBuys[ticker].slice(0, 3).forEach(p => {
                     message += `└ ${p.name} | Сума: ${p.amount} | Дата: ${p.date}\n`;
                 });
                 
                 message += `👔 <b>Інсайдери (ТОП-менеджмент):</b>\n`;
-                insiders[ticker].slice(0, 3).forEach(i => { 
+                insiders.slice(0, 3).forEach(i => { 
                     let shortTitle = i.title.length > 20 ? i.title.substring(0,20)+"..." : i.title;
                     message += `└ ${i.name} (${shortTitle}) | <b>${formatMoney(i.amount)}</b> | Дата: ${i.date}\n`;
                 });
-                
                 message += `\n`;
             }
+            
+            // Захист від rate-limit API FMP (пауза 300мс)
+            await new Promise(resolve => setTimeout(resolve, 300));
         }
-        
+
         if (!foundMatches) {
-            message += "🤷‍♂️ Сьогодні спільних покупок (Інсайдери + Політики) не знайдено.";
+            message += "🤷‍♂️ Сьогодні спільних покупок (Інсайдери + Політики) на всьому ринку не знайдено.";
             console.log("РЕЗУЛЬТАТ: Збігів немає.");
         } else {
-            message += "💡 <i>Перевірте ці тікери у вашому сканері опціонів!</i>";
-            console.log("РЕЗУЛЬТАТ: Знайдено збіги!");
+            message += "💡 <i>Ці акції знайдені шляхом повного сканування ринку.</i>";
         }
-        
+
+        // Відправка в ТГ
         const tgResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -162,12 +143,11 @@ async function runSniper() {
                 disable_web_page_preview: true
             })
         });
-        
+
         if (tgResponse.ok) {
-            console.log("✅ Детальний звіт снайпера відправлено в Telegram!");
+            console.log("✅ Глобальний звіт відправлено в Telegram!");
         } else {
-            const errTg = await tgResponse.text();
-            console.error("❌ Telegram відхилив повідомлення:", errTg);
+            console.error("❌ Telegram відхилив повідомлення:", await tgResponse.text());
         }
 
     } catch (error) {
@@ -175,4 +155,4 @@ async function runSniper() {
     }
 }
 
-runSniper();
+runGlobalSniper();
