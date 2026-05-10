@@ -19,7 +19,7 @@ const formatMoney = (num) => {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runOptionsScanner() {
-    console.log("🔍 Запуск сканера опціонів (Економія лімітів API)...");
+    console.log("🔍 Запуск сканера опціонів (Оптимізований UI)...");
     
     if (!MARKETDATA_TOKEN) {
         console.error("❌ ПОМИЛКА: Не знайдено MARKETDATA_TOKEN!");
@@ -35,7 +35,6 @@ async function runOptionsScanner() {
         console.log(`Скануємо ${ticker}...`);
 
         try {
-            // КРОК 1: Отримуємо тільки дати експірації (Коштує 1 кредит)
             const expResponse = await fetch(`https://api.marketdata.app/v1/options/expirations/${ticker}`, {
                 headers: {
                     'Authorization': `Bearer ${MARKETDATA_TOKEN}`,
@@ -45,7 +44,7 @@ async function runOptionsScanner() {
 
             if (expResponse.status === 429) {
                 console.log(`⚠️ MarketData (429): Денний ліміт вичерпано.`);
-                break; // Немає сенсу мучити інші тікери, якщо ліміт закінчився
+                break; 
             }
 
             const expData = await expResponse.json();
@@ -54,10 +53,8 @@ async function runOptionsScanner() {
                 continue;
             }
 
-            // Беремо найближчу дату (наприклад "2026-05-15")
             const nearestExpDate = expData.expirations.sort()[0];
 
-            // КРОК 2: Запитуємо ланцюг опціонів ТІЛЬКИ на цю дату (Коштує ще 1 кредит)
             const response = await fetch(`https://api.marketdata.app/v1/options/chain/${ticker}?expiration=${nearestExpDate}`, {
                 headers: {
                     'Authorization': `Bearer ${MARKETDATA_TOKEN}`,
@@ -75,7 +72,6 @@ async function runOptionsScanner() {
             let totalCallVol = 0, totalPutVol = 0;
             let totalCallMoney = 0, totalPutMoney = 0;
 
-            // Збираємо тотали
             for (let i = 0; i < data.optionSymbol.length; i++) {
                 const type = data.side[i].toUpperCase(); 
                 const volume = data.volume[i] || 0;
@@ -94,13 +90,11 @@ async function runOptionsScanner() {
             const totalMoney = totalCallMoney + totalPutMoney;
             const moneyPCRatio = totalCallMoney > 0 ? (totalPutMoney / totalCallMoney) : 0;
 
-            // Динамічні пороги для фільтрації шуму
             const dynamicMoneyThreshold = Math.max(50000, totalMoney * 0.015); 
             const dynamicVolThreshold = Math.max(500, totalVolume * 0.01);
 
             let tickerAnomalies = [];
 
-            // Шукаємо аномалії
             for (let i = 0; i < data.optionSymbol.length; i++) {
                 const volume = data.volume[i] || 0;
                 const openInterest = data.openInterest[i] || 0;
@@ -121,30 +115,31 @@ async function runOptionsScanner() {
             const hasStrikeAnomaly = tickerAnomalies.length > 0 && sumOfAnomalies > Math.max(250000, totalMoney * 0.03);
             const hasDirectionalAnomaly = totalVolume > 50000 && (moneyPCRatio < 0.25 || moneyPCRatio > 4.0);
 
+            // ФОРМУВАННЯ КОМПАКТНОГО ПОВІДОМЛЕННЯ
             if (hasStrikeAnomaly || hasDirectionalAnomaly) {
                 foundAnomalies = true;
                 
-                let sentiment = moneyPCRatio < 0.5 ? "🟢 Бичачий (Скупляють Calls)" : (moneyPCRatio > 2.0 ? "🔴 Ведмежий (Скупляють Puts)" : "🟡 Змішаний");
+                let sentiment = moneyPCRatio < 0.5 ? "🟢 Бичачий" : (moneyPCRatio > 2.0 ? "🔴 Ведмежий" : "🟡 Змішаний");
 
-                finalTelegramMessage += `🏢 <b>${ticker}</b> (Експірація: ${nearestExpDate})\n`;
-                finalTelegramMessage += `📊 Настрій грошей: ${sentiment}\n`;
-                finalTelegramMessage += `💸 Загальний потік: ${formatMoney(totalMoney)} (Calls: ${formatMoney(totalCallMoney)} / Puts: ${formatMoney(totalPutMoney)})\n`;
+                finalTelegramMessage += `🔥 <b>${ticker}</b> (Експ: ${nearestExpDate})\n`;
+                finalTelegramMessage += `⚖️ Ринок: ${sentiment} | Потік: ${formatMoney(totalMoney)} (C: ${formatMoney(totalCallMoney)} / P: ${formatMoney(totalPutMoney)})\n`;
                 
                 if (hasDirectionalAnomaly && !hasStrikeAnomaly) {
-                    finalTelegramMessage += `🌊 <i>Спрацював радар глобального перекосу (шалений об'єм в один бік).</i>\n`;
+                    finalTelegramMessage += `🌊 <b>Цунамі:</b> Аномальний перекіс об'єму в один бік!\n`;
                 }
 
                 if (hasStrikeAnomaly) {
-                    finalTelegramMessage += `🎯 Точкові аномалії (Жирні кити):\n`;
+                    finalTelegramMessage += `🎯 <b>Аномальні страйки:</b>\n`;
                     tickerAnomalies.sort((a, b) => b.money - a.money).slice(0, 3).forEach(a => {
                         let icon = a.type === "CALL" ? "📈" : "📉";
-                        finalTelegramMessage += `  ${icon} ${a.type} | Strike: $${a.strike} | Vol: ${a.volume} (OI: ${a.oi}) | ${formatMoney(a.money)}\n`;
+                        let excess = a.oi > 0 ? (a.volume / a.oi).toFixed(1) : a.volume; // Рахуємо мультиплікатор
+                        
+                        finalTelegramMessage += `└ ${icon} <b>${a.type} $${a.strike}</b> | Влито: <b>${formatMoney(a.money)}</b> | Vol: ${a.volume} (OI перевищено в <b>${excess}x</b>)\n`;
                     });
                 }
                 finalTelegramMessage += `\n`;
             }
 
-            // Робимо невелику паузу, щоб не відправити занадто багато запитів за секунду
             await sleep(1000);
 
         } catch (error) {
