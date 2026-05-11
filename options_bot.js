@@ -10,6 +10,11 @@ const TARGET_COMPANIES = [
     "AMD", "SPY"
 ];
 
+// 🎯 НАЛАШТУВАННЯ ДАТИ ЕКСПІРАЦІЇ
+// Мінімальна кількість днів до експірації. 
+// 7 = ігноруємо опціони, що згорають на цьому тижні.
+const MIN_DAYS_TO_EXPIRATION = 7; 
+
 const formatMoney = (num) => {
     if (num >= 1000000) return `$${(num / 1000000).toFixed(2)}M`;
     if (num >= 1000) return `$${(num / 1000).toFixed(0)}k`;
@@ -30,10 +35,9 @@ async function runOptionsScanner() {
 
     let finalTelegramMessage = "🐋 <b>РАДАР МЕГА-КИТІВ</b> 🐋\n\n";
     let foundAnomalies = false;
+    const today = new Date();
 
     for (const ticker of TARGET_COMPANIES) {
-        console.log(`Скануємо ${ticker}...`);
-
         try {
             const expResponse = await fetch(`https://api.marketdata.app/v1/options/expirations/${ticker}`, {
                 headers: {
@@ -53,9 +57,31 @@ async function runOptionsScanner() {
                 continue;
             }
 
-            const nearestExpDate = expData.expirations.sort()[0];
+            // --- НОВА ЛОГІКА ПОШУКУ ОПТИМАЛЬНОЇ ДАТИ ---
+            const sortedExps = expData.expirations.sort();
+            let optimalExpDate = null;
 
-            const response = await fetch(`https://api.marketdata.app/v1/options/chain/${ticker}?expiration=${nearestExpDate}`, {
+            for (const dateStr of sortedExps) {
+                const expDate = new Date(dateStr);
+                // Рахуємо різницю в днях між сьогодні і датою експірації
+                const diffDays = Math.ceil((expDate - today) / (1000 * 60 * 60 * 24));
+                
+                if (diffDays >= MIN_DAYS_TO_EXPIRATION) {
+                    optimalExpDate = dateStr;
+                    break; // Знайшли першу дату, яка відповідає умовам, зупиняємо пошук
+                }
+            }
+
+            // Fallback: якщо раптом всі доступні дати менші за MIN_DAYS (буває вкрай рідко), 
+            // беремо найдальшу з доступних, щоб скрипт не впав
+            if (!optimalExpDate) {
+                optimalExpDate = sortedExps[sortedExps.length - 1];
+            }
+
+            console.log(`Скануємо ${ticker}... Обрано дату: ${optimalExpDate}`);
+            // ---------------------------------------------
+
+            const response = await fetch(`https://api.marketdata.app/v1/options/chain/${ticker}?expiration=${optimalExpDate}`, {
                 headers: {
                     'Authorization': `Bearer ${MARKETDATA_TOKEN}`,
                     'Accept': 'application/json'
@@ -125,7 +151,7 @@ async function runOptionsScanner() {
                 
                 let sentiment = moneyPCRatio < 0.5 ? "🟢 Бичачий" : (moneyPCRatio > 2.0 ? "🔴 Ведмежий" : "🟡 Змішаний");
 
-                finalTelegramMessage += `🔥 <b>${ticker}</b> (Експ: ${nearestExpDate})\n`;
+                finalTelegramMessage += `🔥 <b>${ticker}</b> (Експ: ${optimalExpDate})\n`;
                 finalTelegramMessage += `⚖️ Ринок: ${sentiment} | Потік: ${formatMoney(totalMoney)} (C: ${formatMoney(totalCallMoney)} / P: ${formatMoney(totalPutMoney)})\n`;
                 
                 if (hasDirectionalAnomaly && !hasStrikeAnomaly) {
@@ -187,7 +213,7 @@ async function runOptionsScanner() {
             console.error("Помилка мережі при відправці в ТГ:", err);
         }
     } else {
-        console.log("Крупних аномальних угод сьогодні не знайдено. Ринок спокійний.");
+        console.log("Крупних аномальних угод на цільові дати не знайдено. Ринок спокійний.");
     }
     
     process.exit(0);
